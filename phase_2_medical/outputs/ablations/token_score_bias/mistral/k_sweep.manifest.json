@@ -1,0 +1,52 @@
+{
+  "input": "/workspace/uqlm_white_box_scorer/phase_2_medical/outputs/frozen/truthfulqa_hallu_mistral_like.jsonl",
+  "model_name": "mistralai/Mistral-7B-Instruct-v0.2",
+  "seed": 42,
+  "k_list": [
+    1,
+    2,
+    3,
+    5,
+    10,
+    20
+  ],
+  "results": {
+    "1": {
+      "n_valid": 297,
+      "n_skipped": 3,
+      "LNTP_auc": 0.5255828721763586,
+      "MTP_auc": 0.5614850766578972
+    },
+    "2": {
+      "n_valid": 300,
+      "n_skipped": 0,
+      "LNTP_auc": 0.5658918174141073,
+      "MTP_auc": 0.5677363438375038
+    },
+    "3": {
+      "n_valid": 300,
+      "n_skipped": 0,
+      "LNTP_auc": 0.5755589137294991,
+      "MTP_auc": 0.5677807902573448
+    },
+    "5": {
+      "n_valid": 300,
+      "n_skipped": 0,
+      "LNTP_auc": 0.6175607804791324,
+      "MTP_auc": 0.5679363527267879
+    },
+    "10": {
+      "n_valid": 300,
+      "n_skipped": 0,
+      "LNTP_auc": 0.6233610382683674,
+      "MTP_auc": 0.5677585670474244
+    },
+    "20": {
+      "n_valid": 300,
+      "n_skipped": 0,
+      "LNTP_auc": 0.618694164185075,
+      "MTP_auc": 0.5674696653184587
+    }
+  },
+  "timestamp": "2026-02-18 07:59:19"
+}

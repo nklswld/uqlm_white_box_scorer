@@ -1,0 +1,19 @@
+# Benchmarks Overview – UQLM Master Thesis (Niklas Wild)
+
+**Zweck:** Übersicht aller verwendeten medizinischen Benchmarks zur Evaluierung von Uncertainty Quantification in Large Language Models.
+
+---
+
+## Medizinische Benchmarks
+
+| Benchmark | Quelle | Ziel / Unsicherheitsfokus |
+|:--|:--|:--|
+| MedQA (USMLE) | https://huggingface.co/datasets/medmcqa | Faktische Vorhersageunsicherheit bei medizinischen Entscheidungsfragen |
+| PubMedQA | https://huggingface.co/datasets/pubmed_qa | Epistemische Unsicherheit bei wissenschaftlicher Evidenz (Yes/No/Maybe) |
+
+---
+
+**Hinweis:**  
+Die Datensätze werden automatisch über Hugging Face geladen und im lokalen Cache unter  
+`C:\Users\Niklas\.cache\huggingface\datasets` gespeichert.  
+Evaluationsergebnisse werden in `/results/` abgelegt.

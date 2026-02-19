@@ -1,0 +1,705 @@
+# phase_2_medical/analysis/phase2_figures.py
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score
+
+import matplotlib as mpl
+
+
+FONT_SCALE = 1.35  # <- 1.2 bis 1.6 testen (Start: 1.35)
+
+mpl.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
+
+    "font.size": int(12 * FONT_SCALE),
+    "axes.titlesize": int(13 * FONT_SCALE),
+    "axes.labelsize": int(12 * FONT_SCALE),
+    "xtick.labelsize": int(13 * FONT_SCALE),
+    "ytick.labelsize": int(11 * FONT_SCALE),
+    "legend.fontsize": int(11 * FONT_SCALE),
+    "legend.title_fontsize": int(11 * FONT_SCALE),
+    "figure.titlesize": int(14.5 * FONT_SCALE),
+
+    "axes.titlepad": 12,
+
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "mathtext.fontset": "dejavuserif",
+})
+
+VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE) # for numbers above CI whiskers
+
+
+# ---------------------------------------------------------------------
+# Paths (FINAL-only; Ablations gehören NICHT hier rein)
+# ---------------------------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]   # .../phase_2_medical
+FINAL = ROOT / "outputs" / "final"
+FIGS = ROOT / "outputs" / "figs"
+FIGS.mkdir(parents=True, exist_ok=True)
+
+# In deinem Projekt liegen die Phase-2 Metrics CSVs unter outputs/final/
+METRICS_OUT = FINAL
+METRICS_OUT.mkdir(parents=True, exist_ok=True)
+
+# Main scorers reported in Phase 2
+MAIN_SCORES = {"lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"}
+
+# ---------------------------------------------------------------------
+# Plot constants (for consistent scaling across ALL figures)
+# ---------------------------------------------------------------------
+AUROC_YLIM = (0.45, 0.80)
+SPEARMAN_YLIM = (-0.05, 0.60)
+
+# "Nice" labels everywhere
+SCORE_PRETTY = {
+    "lntp": "LNTP",
+    "mtp": "MTP",
+    "egh_probe_oof": "EGH",
+    "hidden_probe_oof": "Hidden",
+}
+SCORE_ORDER = ["lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"]
+
+# ---------------------------------------------------------------------
+# Robust save helper (handles Windows PDF file locks)
+# ---------------------------------------------------------------------
+def safe_savefig(fig, outpath: Path, **kwargs):
+    """
+    Save a figure as PDF robustly on Windows where an open PDF can lock the file.
+    If the target is locked, write to *_v2.pdf, *_v3.pdf, ...
+    """
+    outpath = Path(outpath)
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        fig.savefig(outpath, **kwargs)
+        return outpath
+    except PermissionError:
+        stem = outpath.stem
+        suffix = outpath.suffix
+        for k in range(2, 50):
+            alt = outpath.with_name(f"{stem}_v{k}{suffix}")
+            try:
+                fig.savefig(alt, **kwargs)
+                print(f"[WARN] Permission denied for {outpath.name} (likely open). Wrote: {alt.name}")
+                return alt
+            except PermissionError:
+                continue
+        raise
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+def load_jsonl(path: Path):
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+def np_load_first_array(npz_path: Path):
+    z = np.load(npz_path, allow_pickle=True)
+    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+        if k in z.files:
+            return z[k]
+    return z[z.files[0]]
+
+def load_bootstrap_indices(boot_path: Path):
+    arr = np_load_first_array(boot_path)
+    if isinstance(arr, np.ndarray) and arr.dtype == object:
+        arr = np.stack(arr, axis=0)
+    return arr.astype(int)
+
+def find_label_key(example: dict):
+    for k in ["is_error", "label", "y", "target", "error"]:
+        if k in example:
+            return k
+    raise KeyError("No label key found (expected is_error/label/y/target/error).")
+
+def extract_scores(example: dict):
+    if "scores" in example and isinstance(example["scores"], dict):
+        return example["scores"]
+    if "wb_scores" in example and isinstance(example["wb_scores"], dict):
+        return example["wb_scores"]
+
+    scores = {}
+    for k, v in example.items():
+        if isinstance(v, (float, int)):
+            kk = str(k).lower()
+            if any(s in kk for s in ["lntp", "mtp", "egh", "hidden"]):
+                scores[kk] = float(v)
+    return scores
+
+def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    au = roc_auc_score(y, s)
+    if au < 0.5:
+        return roc_auc_score(y, -s), -1.0
+    return au, +1.0
+
+def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    aucs = []
+    for idx in boot_idx:
+        yy = y[idx]
+        ss = s[idx]
+        if yy.min() == yy.max():
+            continue
+        aucs.append(roc_auc_score(yy, ss))
+    aucs = np.asarray(aucs, dtype=float)
+    mean = float(np.mean(aucs))
+    lo = float(np.quantile(aucs, alpha / 2))
+    hi = float(np.quantile(aucs, 1 - alpha / 2))
+    return mean, lo, hi
+
+def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    rhos = []
+    for idx in boot_idx:
+        yy = y[idx]
+        ss = s[idx]
+        if yy.min() == yy.max():
+            continue
+        rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
+        if pd.isna(rho):
+            continue
+        rhos.append(float(rho))
+    rhos = np.asarray(rhos, dtype=float)
+    mean = float(np.mean(rhos))
+    lo = float(np.quantile(rhos, alpha / 2))
+    hi = float(np.quantile(rhos, 1 - alpha / 2))
+    return mean, lo, hi
+
+def infer_task_model_from_manifest(manifest_path: Path):
+    m = json.loads(manifest_path.read_text(encoding="utf-8"))
+    task = str(m.get("task", "")).lower()
+    config = m.get("config", {})
+    model_name = str(config.get("model_name", "")).lower()
+    model = "biomistral" if "bio" in model_name else "mistral"
+    return task, model
+
+def pretty_score(score_key: str) -> str:
+    k = str(score_key).lower()
+    return SCORE_PRETTY.get(k, k)
+
+# ---------------------------------------------------------------------
+# Value labels (3 decimals) above CI whiskers
+# ---------------------------------------------------------------------
+def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high, fmt="{:.3f}", fontsize=None, pad_frac=0.015):
+    """
+    Place labels above the CI whisker (y + yerr_high) for each bar.
+    """
+    if fontsize is None:
+        fontsize = VALUE_LABEL_FONTSIZE
+
+    y_min, y_max = ax.get_ylim()
+    span = y_max - y_min
+    pad = pad_frac * span  # vertical padding
+
+    for x, y, eh in zip(x_positions, y_values, yerr_high):
+        if y is None or (isinstance(y, float) and np.isnan(y)):
+            continue
+        top = y + (0.0 if eh is None else float(eh))
+        ax.text(float(x), float(top) + pad, fmt.format(float(y)),
+                ha="center", va="bottom", fontsize=fontsize)
+
+# ---------------------------------------------------------------------
+# Collect FINAL runs
+# ---------------------------------------------------------------------
+print("ROOT =", ROOT)
+print("FINAL =", FINAL)
+print("FINAL exists =", FINAL.exists())
+
+if not FINAL.exists():
+    raise FileNotFoundError(f"FINAL directory not found: {FINAL}")
+
+runs = []
+for manifest_path in sorted(FINAL.glob("*.manifest.json")):
+    results_path = manifest_path.with_suffix("").with_suffix(".results.jsonl")
+    boot_path = manifest_path.with_suffix("").with_suffix(".manifest.bootstrap_indices.npz")
+
+    if not results_path.exists():
+        print("[WARN] Missing results for", manifest_path.name, "expected:", results_path.name)
+        continue
+    if not boot_path.exists():
+        print("[WARN] Missing bootstrap npz for", manifest_path.name, "expected:", boot_path.name)
+        continue
+
+    task, model = infer_task_model_from_manifest(manifest_path)
+    runs.append((task, model, results_path, manifest_path, boot_path))
+
+print("Found FINAL runs:", [(t, m, p.name) for t, m, p, _, _ in runs])
+
+if len(runs) == 0:
+    listing = sorted([p.name for p in FINAL.iterdir()])
+    raise RuntimeError(
+        "Found runs: [] but FINAL contains files. This usually means naming mismatch.\n"
+        f"FINAL listing:\n{listing}\n"
+        "Expected pattern per run:\n"
+        "  *.manifest.json\n"
+        "  sameprefix.results.jsonl\n"
+        "  sameprefix.manifest.bootstrap_indices.npz\n"
+    )
+
+# ---------------------------------------------------------------------
+# Compute AUROC + CI per score
+# ---------------------------------------------------------------------
+records = []
+spearman_records = []
+spearman_ci_rows = []
+
+for task, model, results_path, manifest_path, boot_path in runs:
+    rows = load_jsonl(results_path)
+    if not rows:
+        continue
+
+    y_key = find_label_key(rows[0])
+    y = np.array([int(r[y_key]) for r in rows], dtype=int)
+
+    score_dicts = [extract_scores(r) for r in rows]
+
+    keys = set(score_dicts[0].keys())
+    for d in score_dicts[1:]:
+        keys &= set(d.keys())
+    keys = sorted(keys)
+
+    S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
+    S = {str(k).lower(): v for k, v in S.items()}
+    S = {k: v for k, v in S.items() if k in MAIN_SCORES}
+
+    boot_idx = load_bootstrap_indices(boot_path)
+
+    for score_name, s_raw in S.items():
+        au, direction = auroc_with_best_direction(y, s_raw)
+        s = s_raw * direction
+
+        mean_b, lo, hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
+
+        records.append({
+            "task": task,
+            "model": model,
+            "score": score_name,
+            "direction": direction,
+            "auroc": float(au),
+            "boot_mean": mean_b,
+            "ci95_lo": lo,
+            "ci95_hi": hi,
+            "N": int(len(y)),
+            "pos_rate": float(y.mean()),
+            "results_file": str(results_path),
+            "boot_file": str(boot_path),
+            "manifest_file": str(manifest_path),
+        })
+
+        rho = pd.Series(s).corr(pd.Series(y), method="spearman")
+        spearman_records.append({
+            "task": task,
+            "model": model,
+            "score": score_name,
+            "spearman_rho": float(rho) if not pd.isna(rho) else np.nan,
+            "N": int(len(y)),
+            "pos_rate": float(y.mean()),
+            "manifest_file": str(manifest_path),
+        })
+
+        m_rho, lo_rho, hi_rho = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        spearman_ci_rows.append({
+            "task": task,
+            "model": model,
+            "score": score_name,
+            "spearman_rho_boot_mean": m_rho,
+            "ci95_lo": lo_rho,
+            "ci95_hi": hi_rho,
+        })
+
+df = pd.DataFrame(records).sort_values(["task", "model", "auroc"], ascending=[True, True, False])
+
+out_csv = METRICS_OUT / "phase2_metrics_auroc_ci.csv"
+df.to_csv(out_csv, index=False)
+print("Wrote:", out_csv)
+
+df_main = df[df["score"].isin(MAIN_SCORES)].copy()
+out_csv_filtered = METRICS_OUT / "phase2_metrics_auroc_ci_filtered.csv"
+df_main.to_csv(out_csv_filtered, index=False)
+print("Wrote:", out_csv_filtered)
+
+df_spear_main = pd.DataFrame(spearman_records)
+df_spear_ci = pd.DataFrame(spearman_ci_rows)
+df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], how="left")
+
+out_spear = METRICS_OUT / "phase2_metrics_spearman_rho.csv"
+df_spear_main.to_csv(out_spear, index=False)
+print("Wrote:", out_spear)
+
+out_spear_filtered = METRICS_OUT / "phase2_metrics_spearman_rho_filtered.csv"
+df_spear_main[df_spear_main["score"].isin(MAIN_SCORES)].to_csv(out_spear_filtered, index=False)
+print("Wrote:", out_spear_filtered)
+
+# ---------------------------------------------------------------------
+# Plot: AUROC bar + CI (labels above CI; errorbars black)
+# ---------------------------------------------------------------------
+def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
+    dfp = df_task.copy()
+    dfp["label"] = dfp["model"].str.upper() + " | " + dfp["score"].astype(str).map(pretty_score)
+    dfp = dfp.sort_values("auroc", ascending=False).reset_index(drop=True)
+
+    x = np.arange(len(dfp))
+    yv = dfp["auroc"].values.astype(float)
+    yerr_low = yv - dfp["ci95_lo"].values.astype(float)
+    yerr_high = dfp["ci95_hi"].values.astype(float) - yv
+
+    plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
+    ax = plt.gca()
+    ax.bar(x, yv)
+    ax.errorbar(x, yv, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
+    ax.set_ylim(*AUROC_YLIM)
+    ax.set_ylabel("AUROC")
+    ax.set_title(title)
+
+    add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
+
+    plt.tight_layout()
+    safe_savefig(plt.gcf(), outpath)
+    plt.close()
+
+for task in df_main["task"].unique():
+    plot_auroc_bar(df_main[df_main["task"] == task], f"Phase 2 AUROC + 95% CI — {task}", FIGS / f"fig_phase2_auroc_bar_{task}.pdf")
+plot_auroc_bar(df_main, "Phase 2 AUROC + 95% CI — all runs (MedQA + PubMedQA shown together)", FIGS / "fig_phase2_auroc_bar_ALL.pdf")
+
+# ---------------------------------------------------------------------
+# Plot: Spearman bar + CI (labels above CI; errorbars black)
+# ---------------------------------------------------------------------
+def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
+    dfp = df_task.copy()
+    dfp["label"] = dfp["model"].str.upper() + " | " + dfp["score"].astype(str).map(pretty_score)
+    dfp = dfp.sort_values("spearman_rho_boot_mean", ascending=False).reset_index(drop=True)
+
+    x = np.arange(len(dfp))
+    yv = dfp["spearman_rho_boot_mean"].values.astype(float)
+    yerr_low = yv - dfp["ci95_lo"].values.astype(float)
+    yerr_high = dfp["ci95_hi"].values.astype(float) - yv
+
+    plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
+    ax = plt.gca()
+    ax.bar(x, yv)
+    ax.errorbar(x, yv, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
+    ax.set_ylim(*SPEARMAN_YLIM)
+    ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
+    ax.set_title(title)
+
+    add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
+
+    plt.tight_layout()
+    safe_savefig(plt.gcf(), outpath)
+    plt.close()
+
+df_spear_main_filtered = df_spear_main[df_spear_main["score"].isin(MAIN_SCORES)].copy()
+for task in df_spear_main_filtered["task"].unique():
+    plot_spearman_bar(
+        df_spear_main_filtered[df_spear_main_filtered["task"] == task],
+        f"Phase 2 Spearman ρ + 95% CI — {task}",
+        FIGS / f"fig_phase2_spearman_bar_{task}.pdf"
+    )
+plot_spearman_bar(
+    df_spear_main_filtered,
+    "Phase 2 Spearman ρ + 95% CI — all runs (MedQA + PubMedQA shown together)",
+    FIGS / "fig_phase2_spearman_bar_ALL.pdf"
+)
+
+# ======================================================================
+# Grouped plots (labels above CI; errorbars black)
+# ======================================================================
+MODEL_ORDER = ["mistral", "biomistral"]
+
+def plot_auroc_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
+    dfp = df_task.copy()
+    dfp["score"] = dfp["score"].map(lambda x: str(x).lower())
+    dfp["model"] = dfp["model"].map(lambda x: str(x).lower())
+    dfp = dfp[dfp["score"].isin(SCORE_ORDER)].copy()
+
+    scorers = SCORE_ORDER
+    models = [m for m in MODEL_ORDER if m in set(dfp["model"])]
+
+    def get_row(score, model):
+        sub = dfp[(dfp["score"] == score) & (dfp["model"] == model)]
+        if len(sub) == 0:
+            return None
+        return sub.iloc[0]
+
+    x_base = np.arange(len(scorers), dtype=float)
+    width = 0.38 if len(models) == 2 else 0.6
+
+    plt.figure(figsize=(10, 4.8))
+    ax = plt.gca()
+
+    for i, model in enumerate(models):
+        offset = (i - (len(models) - 1) / 2.0) * width
+        xs = x_base + offset
+
+        ys, yerr_low, yerr_high = [], [], []
+        for s in scorers:
+            r = get_row(s, model)
+            if r is None:
+                ys.append(np.nan); yerr_low.append(0.0); yerr_high.append(0.0)
+            else:
+                ys.append(float(r["auroc"]))
+                yerr_low.append(float(r["auroc"]) - float(r["ci95_lo"]))
+                yerr_high.append(float(r["ci95_hi"]) - float(r["auroc"]))
+
+        ax.bar(xs, ys, width=width * 0.95, label=model.upper())
+        ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}")
+
+    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.set_xticks(x_base)
+    ax.set_xticklabels([pretty_score(s) for s in scorers])
+    ax.tick_params(axis="x", labelsize=int(11 * FONT_SCALE))
+    ax.set_ylim(*AUROC_YLIM)
+    ax.set_ylabel("AUROC")
+    ax.set_title(title)
+    plt.subplots_adjust(right=0.88)
+    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1))
+
+    plt.tight_layout()
+    safe_savefig(plt.gcf(), outpath)
+    plt.close()
+
+def plot_spearman_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
+    dfp = df_task.copy()
+    dfp["score"] = dfp["score"].map(lambda x: str(x).lower())
+    dfp["model"] = dfp["model"].map(lambda x: str(x).lower())
+    dfp = dfp[dfp["score"].isin(SCORE_ORDER)].copy()
+
+    scorers = SCORE_ORDER
+    models = [m for m in MODEL_ORDER if m in set(dfp["model"])]
+
+    def get_row(score, model):
+        sub = dfp[(dfp["score"] == score) & (dfp["model"] == model)]
+        if len(sub) == 0:
+            return None
+        return sub.iloc[0]
+
+    x_base = np.arange(len(scorers), dtype=float)
+    width = 0.38 if len(models) == 2 else 0.6
+
+    plt.figure(figsize=(10, 4.8))
+    ax = plt.gca()
+
+    for i, model in enumerate(models):
+        offset = (i - (len(models) - 1) / 2.0) * width
+        xs = x_base + offset
+
+        ys, yerr_low, yerr_high = [], [], []
+        for s in scorers:
+            r = get_row(s, model)
+            if r is None:
+                ys.append(np.nan); yerr_low.append(0.0); yerr_high.append(0.0)
+            else:
+                ys.append(float(r["spearman_rho_boot_mean"]))
+                yerr_low.append(float(r["spearman_rho_boot_mean"]) - float(r["ci95_lo"]))
+                yerr_high.append(float(r["ci95_hi"]) - float(r["spearman_rho_boot_mean"]))
+
+        ax.bar(xs, ys, width=width * 0.95, label=model.upper())
+        ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}")
+
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xticks(x_base)
+    ax.set_xticklabels([pretty_score(s) for s in scorers])
+    ax.tick_params(axis="x", labelsize=int(11 * FONT_SCALE))
+    ax.set_ylim(*SPEARMAN_YLIM)   
+    ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
+    ax.set_title(title)
+    plt.subplots_adjust(right=0.88)
+    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1))
+
+    plt.tight_layout()
+    safe_savefig(plt.gcf(), outpath)
+    plt.close()
+
+for task in df_main["task"].unique():
+    plot_auroc_grouped(df_main[df_main["task"] == task],
+                       f"Phase 2 AUROC + 95% CI (grouped) — {task}",
+                       FIGS / f"fig_phase2_auroc_grouped_{task}.pdf")
+plot_auroc_grouped(df_main,
+                   "Phase 2 AUROC + 95% CI (grouped) — all runs (MedQA + PubMedQA shown together)",
+                   FIGS / "fig_phase2_auroc_grouped_ALL.pdf")
+
+for task in df_spear_main_filtered["task"].unique():
+    plot_spearman_grouped(df_spear_main_filtered[df_spear_main_filtered["task"] == task],
+                          f"Phase 2 Spearman ρ + 95% CI (grouped) — {task}",
+                          FIGS / f"fig_phase2_spearman_grouped_{task}.pdf")
+plot_spearman_grouped(df_spear_main_filtered,
+                      "Phase 2 Spearman ρ + 95% CI (grouped) — all runs (MedQA + PubMedQA shown together)",
+                      FIGS / "fig_phase2_spearman_grouped_ALL.pdf")
+
+# ======================================================================
+# STORY FIGURES (1–4)
+# - Only change: add value labels above CI whiskers + black errorbars where applicable
+# ======================================================================
+TASK_ORDER_STORY = ["medqa", "pubmedqa"]
+MODEL_ORDER_STORY = ["mistral", "biomistral"]
+
+TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
+MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
+
+def _panel_bar(ax, sub, title):
+    sub = sub.set_index("score").reindex(SCORE_ORDER).reset_index()
+    x = np.arange(len(SCORE_ORDER), dtype=float)
+    y = sub["auroc"].to_numpy(dtype=float)
+    lo = sub["ci95_lo"].to_numpy(dtype=float)
+    hi = sub["ci95_hi"].to_numpy(dtype=float)
+    yerr_low = y - lo
+    yerr_high = hi - y
+    yerr = np.vstack([yerr_low, yerr_high])
+
+    ax.bar(x, y)
+    ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([pretty_score(s) for s in SCORE_ORDER], rotation=0, fontsize=14)
+    ax.set_ylim(*AUROC_YLIM)
+    ax.set_title(title)
+    ax.set_ylabel("AUROC")
+
+    add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
+
+def _panel_delta(ax, sub, title, y0=-0.05, y1=0.30):
+    sub = sub.set_index("score").reindex(SCORE_ORDER).reset_index()
+    x = np.arange(len(SCORE_ORDER), dtype=float)
+
+    y = sub["auroc"].to_numpy(dtype=float) - 0.5
+    lo = sub["ci95_lo"].to_numpy(dtype=float) - 0.5
+    hi = sub["ci95_hi"].to_numpy(dtype=float) - 0.5
+    yerr_low = y - lo
+    yerr_high = hi - y
+    yerr = np.vstack([yerr_low, yerr_high])
+
+    ax.bar(x, y)
+    ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([pretty_score(s) for s in SCORE_ORDER], rotation=0, fontsize=14)
+    ax.set_ylim(y0, y1)
+    ax.set_title(title)
+    ax.set_ylabel("ΔAUROC (vs 0.5)")
+
+    add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
+
+STORY_DIR = FIGS / "story"
+STORY_DIR.mkdir(parents=True, exist_ok=True)
+
+# (1) 2×2 Grid AUROC
+fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+fig.subplots_adjust(hspace=0.45, wspace=0.25)
+for i, task in enumerate(TASK_ORDER_STORY):
+    for j, model in enumerate(MODEL_ORDER_STORY):
+        ax = axes[i, j]
+        sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
+        _panel_bar(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
+fig.suptitle("Phase 2: White-box scorers across Task × Model (AUROC ± 95% CI)", y=0.98, fontsize=plt.rcParams["figure.titlesize"])
+safe_savefig(fig, STORY_DIR / "fig_phase2_story_1_grid_task_model_auroc.pdf", bbox_inches="tight")
+plt.close(fig)
+
+# (2) 2×2 Grid ΔAUROC
+fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+fig.subplots_adjust(hspace=0.45, wspace=0.25)
+for i, task in enumerate(TASK_ORDER_STORY):
+    for j, model in enumerate(MODEL_ORDER_STORY):
+        ax = axes[i, j]
+        sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
+        _panel_delta(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
+fig.suptitle("Phase 2: Effect size vs random (ΔAUROC ± 95% CI)", y=0.98, fontsize=plt.rcParams["figure.titlesize"])
+safe_savefig(fig, STORY_DIR / "fig_phase2_story_2_grid_task_model_delta_auroc.pdf", bbox_inches="tight")
+plt.close(fig)
+
+# (3) Task-format effect lines (unchanged plot type; only make errorbars black)
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), constrained_layout=True, sharey=True)
+key_scores = ["lntp", "egh_probe_oof", "hidden_probe_oof"]
+
+for j, model in enumerate(MODEL_ORDER_STORY):
+    ax = axes[j]
+    for score in key_scores:
+        ys, los, his = [], [], []
+        for task in TASK_ORDER_STORY:
+            r = df_main[(df_main["task"] == task) & (df_main["model"] == model) & (df_main["score"] == score)].iloc[0]
+            ys.append(float(r["auroc"]))
+            los.append(float(r["ci95_lo"]))
+            his.append(float(r["ci95_hi"]))
+        x = np.arange(len(TASK_ORDER_STORY), dtype=float)
+        ax.plot(x, ys, marker="o", label=pretty_score(score))
+        yerr = np.vstack([np.array(ys) - np.array(los), np.array(his) - np.array(ys)])
+        ax.errorbar(x, ys, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+
+    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.set_xticks(np.arange(len(TASK_ORDER_STORY)))
+    ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=14)
+    ax.set_title(MODEL_PRETTY[model])
+    ax.set_ylabel("AUROC")
+    ax.set_ylim(*AUROC_YLIM)
+
+axes[0].legend(frameon=False, title="Scorer")
+fig.suptitle("Task-format effect: scorer performance shifts from MCQ → Yes/No", y=1.08, fontsize=plt.rcParams["figure.titlesize"])
+safe_savefig(fig, STORY_DIR / "fig_phase2_story_3_task_format_effect_lines.pdf", bbox_inches="tight")
+plt.close(fig)
+
+# (4) Model specialization effect (approx. CI via bounds) — add labels above CI + black errorbars
+rows = []
+for task in TASK_ORDER_STORY:
+    for score in key_scores:
+        r_m = df_main[(df_main["task"] == task) & (df_main["model"] == "mistral") & (df_main["score"] == score)].iloc[0]
+        r_b = df_main[(df_main["task"] == task) & (df_main["model"] == "biomistral") & (df_main["score"] == score)].iloc[0]
+        diff = float(r_m["auroc"]) - float(r_b["auroc"])
+        lo = float(r_m["ci95_lo"]) - float(r_b["ci95_hi"])
+        hi = float(r_m["ci95_hi"]) - float(r_b["ci95_lo"])
+        rows.append({"task": task, "score": score, "diff": diff, "lo": lo, "hi": hi})
+
+dd = pd.DataFrame(rows)
+
+# Wider figure to avoid x-label overlap
+fig, ax = plt.subplots(figsize=(12.5, 5.4), constrained_layout=True)
+
+x_labels, vals, err_low, err_high = [], [], [], []
+for task in TASK_ORDER_STORY:
+    for score in key_scores:
+        r = dd[(dd["task"] == task) & (dd["score"] == score)].iloc[0]
+        x_labels.append(f"{TASK_PRETTY[task]}\n{pretty_score(score)}")
+        vals.append(float(r["diff"]))
+        err_low.append(float(r["diff"] - r["lo"]))
+        err_high.append(float(r["hi"] - r["diff"]))
+
+x = np.arange(len(vals), dtype=float)
+
+ax.bar(x, vals)
+ax.errorbar(x, vals, yerr=[err_low, err_high], fmt="none", capsize=3, ecolor="black")
+ax.axhline(0.0, linestyle="--", linewidth=1)
+
+# X labels: rotate slightly + right align to prevent overlap
+ax.set_xticks(x)
+ax.set_xticklabels(x_labels, rotation=20, ha="right")
+ax.tick_params(axis="x", pad=6)  # a bit more space from axis
+
+ax.set_ylabel("ΔAUROC (Mistral − BioMistral)")
+ax.set_title("Model specialization effect (approx. CI via bounds)")
+
+# Dynamic y-limits with headroom so top label never collides/clips
+ymin = min(np.array(vals) - np.array(err_low))
+ymax = max(np.array(vals) + np.array(err_high))
+pad = 0.12 * (ymax - ymin + 1e-9)  # headroom
+ax.set_ylim(ymin - 0.15 * pad, ymax + pad)
+
+# Slightly larger value labels only for this plot
+add_value_labels_above_ci(ax, x, vals, err_high, fmt="{:.3f}", fontsize=14, pad_frac=0.02)
+
+safe_savefig(fig, STORY_DIR / "fig_phase2_story_4_model_diff_delta_auroc.pdf", bbox_inches="tight")
+plt.close(fig)
