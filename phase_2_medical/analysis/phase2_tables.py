@@ -1,4 +1,14 @@
-# phase_2_medical/analysis/phase2_tables.py
+"""Phase 2 table generation for medical error-detection metrics.
+
+Reads aggregated Phase 2 metrics (bootstrap mean and 95% CI bounds) from CSV files
+and emits publication-ready wide tables for per-task comparisons and appendix-style
+combined-task views (per scorer).
+Inputs: metrics CSVs under outputs/final (AUROC and Spearman rho summaries).
+Outputs: CSV tables under outputs/tables and outputs/tables/appendix.
+Determinism: deterministic given fixed CSV contents; no randomness or sampling here.
+"""
+
+# phase_2_medical/analysis/phase2_tables.py 
 import pandas as pd
 from pathlib import Path
 import numpy as np
@@ -7,14 +17,17 @@ import numpy as np
 # ----------------------------
 # Paths
 # ----------------------------
+# Base directory for upstream Phase 2 metric summaries (produced elsewhere).
 BASE = (Path(__file__).resolve().parents[1] / "outputs" / "final")
+# Output directory for generated table CSVs.
 OUT_DIR = (Path(__file__).resolve().parents[1] / "outputs" / "tables")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# NEW (besprochen): Combined-Tabellen in Appendix-Unterordner
+# Appendix outputs: "combined" tables spanning tasks for a fixed scorer.
 APPENDIX_DIR = OUT_DIR / "appendix"
 APPENDIX_DIR.mkdir(parents=True, exist_ok=True)
 
+# Metric summary inputs (must contain task/model/score keys plus metric + CI columns).
 AUROC_CSV = BASE / "phase2_metrics_auroc_ci_filtered.csv"
 SPEAR_CSV = BASE / "phase2_metrics_spearman_rho_filtered.csv"
 
@@ -22,10 +35,12 @@ SPEAR_CSV = BASE / "phase2_metrics_spearman_rho_filtered.csv"
 # ----------------------------
 # Config
 # ----------------------------
+# Canonical display order for tables; non-listed items may still appear if present in input.
 TASK_ORDER = ["medqa", "pubmedqa"]
 MODEL_ORDER = ["mistral", "biomistral"]
 SCORER_ORDER = ["lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"]
 
+# Stable, repository-wide labels for table readability.
 SCORER_PRETTY = {
     "lntp": "LNTP",
     "mtp": "MTP",
@@ -38,7 +53,7 @@ MODEL_PRETTY = {
     "biomistral": "BioMistral",
 }
 
-# NEW (besprochen): Task-Labels für Combined-Tabellen
+# Task labels used in combined appendix tables.
 TASK_PRETTY = {
     "medqa": "MedQA",
     "pubmedqa": "PubMedQA",
@@ -51,18 +66,20 @@ DIGITS = 2
 # Helpers
 # ----------------------------
 def mean_ci_str(mean: float, lo: float, hi: float, digits: int = 3) -> str:
-    """Format as mean ± halfwidth of CI."""
+    """Return a compact 'mean ± halfwidth' CI string; missing values render as em dash."""
     if any(pd.isna(x) for x in [mean, lo, hi]):
         return "—"
+    # CI is provided as [lo, hi]; we report half-width to match manuscript convention.
     pm = (hi - lo) / 2.0
     return f"{mean:.{digits}f} ± {pm:.{digits}f}"
 
 
 def _get_row(df: pd.DataFrame, task: str, model: str, score: str) -> pd.Series | None:
+    """Return the first matching (task, model, score) row or None if absent."""
     r = df[(df["task"] == task) & (df["model"] == model) & (df["score"] == score)]
     if len(r) == 0:
         return None
-    # If duplicates exist, keep first but warn via comment / consistent behavior
+    # NOTE: potential issue: duplicates are silently resolved by taking the first row (row-order dependent).
     return r.iloc[0]
 
 
@@ -73,9 +90,8 @@ def build_wide_table(
     digits: int = 3,
 ) -> pd.DataFrame:
     """
-    Returns a wide table:
-        Scorer | Mistral | BioMistral
-    Each cell formatted as "mean ± pm".
+    Build a per-task wide table with scorers as rows and models as columns.
+    Cells are formatted as 'mean ± CI half-width' (or '—' if missing).
     """
     mean_col, lo_col, hi_col = value_cols
 
@@ -83,8 +99,10 @@ def build_wide_table(
     for score in SCORER_ORDER:
         row = {"Scorer": SCORER_PRETTY.get(score, score)}
         for model in MODEL_ORDER:
+            # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
             r = _get_row(df, task, model, score)
             if r is None:
+                # Missing combinations are rendered explicitly to avoid silent table shape changes.
                 row[MODEL_PRETTY[model]] = "—"
             else:
                 row[MODEL_PRETTY[model]] = mean_ci_str(
@@ -99,19 +117,16 @@ def build_wide_table(
 
 
 
-# Optional out_dir, damit Combined in Appendix landet
+# Optional out_dir so combined tables can be routed to the appendix subdirectory.
 def save_table_bundle(wide: pd.DataFrame, name: str, caption: str, label: str, out_dir: Path = OUT_DIR):
-    """
-    Save:
-      - CSV only
-    """
+    """Write a single CSV table to disk (LaTeX assets handled elsewhere)."""
     csv_path = out_dir / f"{name}.csv"
     wide.to_csv(csv_path, index=False)
 
     print(f"[OK] Wrote: {csv_path}")
 
 
-# Combined ALL-Task Table pro Scorer (für Anhang)
+# Combined ALL-task table per scorer (appendix convenience view).
 def build_all_task_table_per_scorer(
     df: pd.DataFrame,
     value_cols: tuple[str, str, str],  # (mean_col, lo_col, hi_col)
@@ -119,8 +134,8 @@ def build_all_task_table_per_scorer(
     digits: int = 3,
 ) -> pd.DataFrame:
     """
-    Combined table for one scorer (for appendix):
-        Task | Mistral | BioMistral
+    Build a per-scorer wide table with tasks as rows and models as columns.
+    Intended for appendix: highlights cross-task differences for a fixed scoring method.
     """
     mean_col, lo_col, hi_col = value_cols
 
@@ -128,6 +143,7 @@ def build_all_task_table_per_scorer(
     for task in TASK_ORDER:
         row = {"Task": TASK_PRETTY.get(task, task)}
         for model in MODEL_ORDER:
+            # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
             r = _get_row(df, task, model, score)
             if r is None:
                 row[MODEL_PRETTY[model]] = "—"
@@ -147,12 +163,13 @@ def build_all_task_table_per_scorer(
 # Main
 # ----------------------------
 def main():
+    """Generate per-task and appendix combined-task tables for AUROC and Spearman rho."""
     # --- AUROC ---
     if not AUROC_CSV.exists():
         raise FileNotFoundError(f"Missing AUROC CSV: {AUROC_CSV}")
     df_au = pd.read_csv(AUROC_CSV)
 
-    # expected columns: boot_mean, ci95_lo, ci95_hi
+    # Schema guardrails: fail fast to avoid silently producing malformed tables.
     for c in ["task", "model", "score", "boot_mean", "ci95_lo", "ci95_hi"]:
         if c not in df_au.columns:
             raise KeyError(f"AUROC CSV missing column '{c}'. Found: {list(df_au.columns)}")
@@ -162,14 +179,15 @@ def main():
         raise FileNotFoundError(f"Missing Spearman CSV: {SPEAR_CSV}")
     df_sp = pd.read_csv(SPEAR_CSV)
 
-    # expected columns: spearman_rho_boot_mean, ci95_lo, ci95_hi
+    # Schema guardrails: metric column name differs from AUROC; CI columns are shared.
     for c in ["task", "model", "score", "spearman_rho_boot_mean", "ci95_lo", "ci95_hi"]:
         if c not in df_sp.columns:
             raise KeyError(f"Spearman CSV missing column '{c}'. Found: {list(df_sp.columns)}")
 
-    # build per-task tables
+    # Build per-task tables, preferring TASK_ORDER but falling back to what's present in the inputs.
     tasks = [t for t in TASK_ORDER if t in set(df_au["task"].unique()) or t in set(df_sp["task"].unique())]
     if not tasks:
+        # NOTE: potential issue: fallback ordering is alphabetical, which may differ from manuscript ordering.
         tasks = sorted(set(df_au["task"].unique()) | set(df_sp["task"].unique()))
 
     for task in tasks:
@@ -201,7 +219,7 @@ def main():
             label=f"tab:phase2_spearman_{task}",
         )
 
-    # Combined Tabellen -> Appendix
+    # Combined tables -> appendix (one table per scorer, with tasks as rows).
     for score in SCORER_ORDER:
         # AUROC combined
         wide_au_all = build_all_task_table_per_scorer(

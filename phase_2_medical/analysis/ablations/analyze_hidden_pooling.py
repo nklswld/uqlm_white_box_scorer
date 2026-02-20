@@ -381,11 +381,21 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             # annotate best pooling per model (keep your original idea; NaN-safe)
             if np.isfinite(y).any():
                 best_i = int(np.nanargmax(y))
+
+                # horizontal offset depending on pooling index
+                dx = 0.02
+                if best_i in [0, 1]:   # last_answer, mean_answer
+                    x_text = x[best_i] + dx
+                    ha = "left"
+                else:                  # mean_all
+                    x_text = x[best_i] - dx
+                    ha = "right"
+
                 ax.text(
-                    x[best_i],
-                    y[best_i] + 0.02 * (y_lim[1] - y_lim[0]),
+                    x_text,
+                    y[best_i] + 0.01 * (y_lim[1] - y_lim[0]),
                     f"{y[best_i]:.3f}",
-                    ha="center",
+                    ha=ha,
                     va="bottom",
                     fontsize=VALUE_LABEL_FONTSIZE,
                 )
@@ -398,7 +408,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.02, fontsize=plt.rcParams["figure.titlesize"])
+    fig.suptitle(title, y=1.06, fontsize=plt.rcParams["figure.titlesize"])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -437,7 +447,7 @@ def plot_bars(metric: str, y_lim, outstem: str):
             yerr_low = y - lo
             yerr_high = hi - y
 
-            fig, ax = plt.subplots(figsize=(10.8, 4.9))
+            fig, ax = plt.subplots(figsize=(10, 4.9))
             ax.bar(x, y)
             ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
             ax.axhline(hline, linestyle="--", linewidth=1)
@@ -455,6 +465,86 @@ def plot_bars(metric: str, y_lim, outstem: str):
             print("Wrote:", OUT_DIR / f"{outstem}_{metric}_{task}_{model}.pdf")
 
 
+def plot_bars_matrix(metric: str, y_lim, outpath: Path):
+    """
+    2x2 matrix:
+      cols = [mistral, biomistral]
+      rows = [medqa, pubmedqa]
+    bars = poolings
+    """
+    tasks_order = ["medqa", "pubmedqa"]
+    models_order = ["mistral", "biomistral"]
+
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=(11.0, 8.6),
+        sharey=True
+    )
+    axes = np.array(axes)
+
+    x = np.arange(len(poolings), dtype=float)
+
+    for r, task in enumerate(tasks_order):
+        for c, model in enumerate(models_order):
+            ax = axes[r, c]
+
+            sub = df_hid[(df_hid["task"] == task) & (df_hid["model"] == model)].copy()
+            if sub.empty:
+                ax.set_axis_off()
+                continue
+
+            # gleiche Reihenfolge & gleiche Balkenpositionen
+            sub = sub.set_index("pooling").reindex(poolings).reset_index()
+
+            if metric == "auroc":
+                y = sub["auroc_boot_mean"].to_numpy(dtype=float)
+                lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
+                hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
+                ylabel = "AUROC"
+                hline = 0.5
+            else:
+                y = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
+                lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
+                hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
+                ylabel = "Spearman ρ (bootstrap mean)"
+                hline = 0.0
+
+            yerr_low = y - lo
+            yerr_high = hi - y
+
+            ax.bar(x, y)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+            ax.axhline(hline, linestyle="--", linewidth=1)
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(poolings, rotation=20, ha="right")
+
+            # ganz wichtig: überall exakt gleiche y-limits
+            ax.set_ylim(*y_lim)
+
+            ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+
+            if c == 0:
+                ax.set_ylabel(ylabel)
+
+            add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
+
+    fig.suptitle(
+        "Ablation: Hidden Probe Pooling — "
+        + ("AUROC ± 95% CI" if metric == "auroc" else "Spearman ρ ± 95% CI"),
+        y=0.97,
+        fontsize=plt.rcParams["figure.titlesize"],
+    )
+
+    # mehr Abstand zwischen oben/unten (dein Wunsch)
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.subplots_adjust(hspace=0.48, wspace=0.14)
+
+    safe_savefig(fig, outpath, bbox_inches="tight")
+    plt.close(fig)
+    print("Wrote:", outpath)
+    
+
 # Overlay figures (story-like; per task; lines = models; with CI band)
 plot_overlay(
     metric="auroc",
@@ -469,8 +559,16 @@ plot_overlay(
     outpath=OUT_DIR / "fig_ablation_hidden_pooling_spearman_overlay.pdf",
 )
 
-# Detailed bars (per task × model)
-plot_bars(metric="auroc", y_lim=AUROC_YLIM, outstem="fig_ablation_hidden_pooling")
-plot_bars(metric="spearman", y_lim=SPEARMAN_YLIM, outstem="fig_ablation_hidden_pooling")
+# 2x2 matrices (AUROC + Spearman)
+plot_bars_matrix(
+    metric="auroc",
+    y_lim=AUROC_YLIM,
+    outpath=OUT_DIR / "fig_ablation_hidden_pooling_auroc_matrix.pdf",
+)
+plot_bars_matrix(
+    metric="spearman",
+    y_lim=SPEARMAN_YLIM,
+    outpath=OUT_DIR / "fig_ablation_hidden_pooling_spearman_matrix.pdf",
+)
 
 print("[OK] Hidden pooling ablation done. Outputs in:", OUT_DIR)

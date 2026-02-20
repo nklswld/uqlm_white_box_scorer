@@ -1,4 +1,13 @@
-# phase_2_medical/analysis/ablations/analyze_egh_ge_components.py
+"""
+Analyze ablations of EGH probe components (G-only, E-only, G+E) from finalized runs.
+Inputs: per-run *.results.jsonl (example-level labels + score fields) and *.bootstrap_indices.npz
+        discovered under outputs/final/ using matching *.manifest.json prefixes.
+Outputs: (i) CSV of per-run bootstrap summary metrics, (ii) overlay line plots, (iii) 2x2 barplot matrices.
+Metrics: AUROC (polarity chosen so AUROC >= 0.5; flip if needed) and Spearman correlation, both with 95% bootstrap CI.
+Reproducibility: fully deterministic given fixed bootstrap index files and unchanged finalized artifacts.
+"""
+
+# phase_2_medical/analysis/ablations/analyze_egh_ge_components.py 
 import json
 from pathlib import Path
 
@@ -12,6 +21,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
+# Global Matplotlib style for figure-level comparability across scripts (font sizes, PDF embedding, etc.).
 FONT_SCALE = 1.35
 
 mpl.rcParams.update({
@@ -36,6 +46,7 @@ mpl.rcParams.update({
 
 VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 
+# Fixed y-limits improve between-panel comparability; update only when expanding expected metric range.
 AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.05, 0.60)
 
@@ -47,6 +58,7 @@ MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 # Robust save helper (Windows PDF file lock)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
+    """Save a figure, retrying with a versioned filename if the target PDF is locked by another process."""
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -70,6 +82,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # ============================================================
 def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
                               fmt="{:.3f}", fontsize=None, pad_frac=0.015):
+    """Annotate point estimates above their CI upper whisker (skips NaN/None values)."""
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
@@ -89,6 +102,7 @@ def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
 # IO helpers
 # ============================================================
 def load_jsonl(path: Path):
+    """Load a JSONL file into a list of dicts (one dict per non-empty line)."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -98,32 +112,40 @@ def load_jsonl(path: Path):
     return rows
 
 def np_load_first_array(npz_path: Path):
+    """Load bootstrap index array from an NPZ, preferring common field names; otherwise use the first stored array."""
     z = np.load(npz_path, allow_pickle=True)
+    # Convention: accept multiple historical key names to avoid coupling to one producer script.
     for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if k in z.files:
             return z[k]
     return z[z.files[0]]
 
 def load_bootstrap_indices(boot_path: Path):
+    """Return bootstrap index matrix as int ndarray (n_boot, n_samples), stacking object arrays if needed."""
     arr = np_load_first_array(boot_path)
+    # Some pipelines save a pickled list-of-arrays; standardize to a 2D integer index matrix.
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
 
 def find_label_key(example: dict):
+    """Heuristically select the label key from a result row (first match among known conventions)."""
+    # NOTE: potential issue: this relies on key presence only; mixed schemas across files will mislabel silently.
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
             return k
     raise KeyError("No label key found (expected is_error/label/y/target/error).")
 
 def extract_scores(example: dict):
-    # canonical
+    """Extract a lowercased mapping of score-name -> float score from a result row, with schema fallbacks."""
+    # Primary schema: nested dict of named scores.
     if "scores" in example and isinstance(example["scores"], dict):
         return {str(k).lower(): float(v) for k, v in example["scores"].items()}
     if "wb_scores" in example and isinstance(example["wb_scores"], dict):
         return {str(k).lower(): float(v) for k, v in example["wb_scores"].items()}
 
-    # fallback: take all numeric fields
+    # Fallback schema: treat all numeric top-level fields as scores (risk: may include unintended numeric metadata).
+    # Downstream we only consume CATS keys, so incidental numeric fields are harmless here.
     scores = {}
     for k, v in example.items():
         if isinstance(v, (float, int)):
@@ -131,22 +153,28 @@ def extract_scores(example: dict):
     return scores
 
 def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    """Compute AUROC, flipping score sign if AUROC < 0.5 to enforce 'higher score => positive class' convention."""
+    # Convention: choose score polarity per run/category so reported AUROC is always >= 0.5.
     au = roc_auc_score(y, s)
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
     return au, +1.0
 
 def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap mean and equal-tailed CI for AUROC using precomputed resample indices (skips degenerate resamples)."""
+    # Determinism: resampling is entirely determined by boot_idx loaded from disk (no RNG used here).
     aucs = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Skip resamples without class variation (AUROC undefined); reduces effective bootstrap N silently.
         if yy.min() == yy.max():
             continue
         aucs.append(roc_auc_score(yy, ss))
 
     aucs = np.asarray(aucs, dtype=float)
     if aucs.size == 0:
+        # All resamples were degenerate (or input invalid); propagate NaNs to plotting/export.
         return np.nan, np.nan, np.nan
 
     mean = float(np.mean(aucs))
@@ -155,10 +183,13 @@ def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray
     return mean, lo, hi
 
 def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap mean and equal-tailed CI for Spearman ρ using precomputed resample indices (skips degenerate/NaN)."""
+    # NOTE: potential issue: Spearman on binary y is effectively rank-biserial-like; interpret as monotonic association.
     rhos = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Skip resamples without label variation; correlation is undefined or uninformative.
         if yy.min() == yy.max():
             continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
@@ -179,6 +210,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 # ============================================================
 # Paths (scan outputs/final/)
 # ============================================================
+# Project root inference: this file is expected under phase_2_medical/analysis/ablations/.
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 FINAL_ROOT = ROOT / "outputs" / "final"
 OUT_DIR = ROOT / "outputs" / "figs" / "ablations" / "egh_components"
@@ -197,6 +229,7 @@ if not FINAL_ROOT.exists():
 # Discover runs in final
 # ============================================================
 def parse_task_model_from_prefix(prefix: str):
+    """Parse task/model from a finalized run prefix of form '<task>_<model>.*' (best-effort)."""
     # prefix example: "medqa_biomistral.B5000"
     left = prefix.split(".")[0]
     parts = left.split("_")
@@ -210,6 +243,7 @@ for manifest_path in sorted(FINAL_ROOT.glob("*.manifest.json")):
     results_path = manifest_path.with_name(prefix + ".results.jsonl")
     boot_path = manifest_path.with_name(prefix + ".manifest.bootstrap_indices.npz")
 
+    # Missing artifacts imply the run is not evaluable for deterministic CI; skip but warn for auditability.
     if not results_path.exists():
         print("[WARN] Missing results:", results_path)
         continue
@@ -229,6 +263,7 @@ if len(runs) == 0:
 # ============================================================
 # EGH component keys (from your results.jsonl)
 # ============================================================
+# These keys must exist as score fields for every evaluated run; otherwise the run is excluded.
 CATS = ["egh_probe_g_only", "egh_probe_e_only", "egh_probe_ge"]
 CAT_PRETTY = {
     "egh_probe_g_only": "G-only",
@@ -246,15 +281,18 @@ for task, model, manifest_path, results_path, boot_path in runs:
     if not rows:
         continue
 
+    # Label extraction: binary y is cast to int; positive class is "1" by roc_auc_score convention.
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
+    # Score extraction: enforce intersection of available score keys across all rows to preserve alignment.
     score_dicts = [extract_scores(r) for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
 
+    # Hard requirement: all EGH ablation categories must be present; otherwise metrics would be incomparable.
     missing = [k for k in CATS if k not in S]
     if missing:
         print(f"[WARN] {results_path.name}: missing keys {missing}; skipping this run.")
@@ -264,6 +302,7 @@ for task, model, manifest_path, results_path, boot_path in runs:
 
     for cat in CATS:
         s_raw = S[cat]
+        # Direction normalizes polarity so higher scores correspond to the positive label (AUROC >= 0.5).
         au, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
@@ -304,6 +343,7 @@ if df.empty:
 # Plotting: Overlay per task (lines=model), + Bars per task×model
 # Includes: reindexing to full CATS (Fix), shaded CI band + black whiskers (Fix)
 # ============================================================
+# Order tasks/models to match paper conventions when available; append any additional discovered labels.
 tasks = [t for t in ["medqa", "pubmedqa"] if t in set(df["task"])]
 tasks += sorted([t for t in set(df["task"]) if t not in tasks])
 
@@ -312,6 +352,7 @@ models += sorted([m for m in set(df["model"]) if m not in models])
 
 
 def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
+    """Plot per-task overlays (one subplot per task) with one line per model and 95% CI shading/whiskers."""
     fig, axes = plt.subplots(1, len(tasks), figsize=(6.2 * len(tasks), 4.8), sharey=True)
     if len(tasks) == 1:
         axes = [axes]
@@ -324,6 +365,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             if sub.empty:
                 continue
 
+            # Reindex enforces a consistent x-order even if a category is missing/NaN after filtering upstream.
             sub = sub.set_index("category").reindex(CATS).reset_index()
 
             if metric == "auroc":
@@ -339,12 +381,14 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
                 ylabel = "Spearman ρ (bootstrap mean)"
                 hline = 0.0
 
+            # CI shading only where all bounds are finite (avoids matplotlib warnings / misleading bands).
             mask = np.isfinite(y) & np.isfinite(lo) & np.isfinite(hi)
             if mask.any():
                 ax.fill_between(x[mask], lo[mask], hi[mask], alpha=0.15)
 
             ax.plot(x, y, marker="o", label=MODEL_PRETTY.get(model, model))
             yerr = np.vstack([y - lo, hi - y])
+            # NOTE: potential issue: errorbars are computed for all x; NaNs may be ignored or warn depending on backend.
             ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
 
         ax.axhline(hline, linestyle="--", linewidth=1)
@@ -383,7 +427,7 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             ax = axes[r, c]
             sub = df[(df["task"] == task) & (df["model"] == model)].copy()
 
-            # if something missing, keep panel empty but consistent
+            # Keep panel empty but structurally consistent (fixed axes/labels) when a task×model cell is absent.
             if sub.empty:
                 ax.set_xticks(x)
                 ax.set_xticklabels([CAT_PRETTY.get(cat, cat) for cat in CATS])
@@ -418,10 +462,10 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             ax.set_xticklabels([CAT_PRETTY.get(cat, cat) for cat in CATS])
             ax.set_ylim(*y_lim)
 
-            # Panel title exactly as requested layout implies
+            # Panel title encodes the (task, model) cell for figure caption alignment.
             ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
 
-            # Only left column gets y-label (cleaner)
+            # Only left column gets y-label to reduce redundant ink while preserving readability.
             if c == 0:
                 ax.set_ylabel(ylabel)
 
@@ -434,7 +478,7 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
         fontsize=plt.rcParams["figure.titlesize"],
     )
 
-    # compact but safe spacing (avoid overlaps)
+    # Layout: reserve headroom for the suptitle and avoid inter-panel label overlaps.
     fig.tight_layout(rect=[0, 0, 1, 0.975])
     fig.subplots_adjust(hspace=0.35, wspace=0.12)
 

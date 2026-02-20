@@ -1,29 +1,17 @@
-# phase_2_medical/analysis/ablations/analyze_bootstrap_budget.py
-#
-# Ablation: Bootstrap Budget (B ∈ {1000, 2000, 5000, 10000})
-# Goal: show CI-width convergence / numerical stability as B increases.
-#
-# Reads ablation artifacts from:
-#   phase_2_medical/outputs/ablations/bootstrap_budget/...
-#
-# Expected per run:
-#   *.manifest.json
-#   corresponding *.results.jsonl
-#   corresponding *.manifest.bootstrap_indices.npz  (or any *bootstrap_indices*.npz)
-#
-# Produces:
-#   - outputs/ablations/bootstrap_budget/analysis_bootstrap_budget_metrics.csv
-#   - outputs/ablations/bootstrap_budget/analysis_bootstrap_budget_summary.csv
-#   - outputs/figs/ablations/bootstrap_budget/
-#       fig_ablation_bootstrap_budget_ciwidth_auroc.pdf
-#       fig_ablation_bootstrap_budget_ciwidth_spearman.pdf
-#       fig_ablation_bootstrap_budget_delta_ci_auroc.pdf          (Option B)
-#       fig_ablation_bootstrap_budget_delta_ci_spearman.pdf       (Option B)
-#
-# IMPORTANT:
-#   - Styling matches phase2_figures.py and the other ablation analyzers.
-#   - Option A implemented: tight, global y-axis based on observed range (same across panels).
-#   - Option B implemented: Δ CI half-width relative to B=max (usually 10000).
+"""
+Analyze the bootstrap-budget ablation by quantifying CI-width convergence as the number of bootstrap
+resamples B increases (e.g., B ∈ {1000, 2000, 5000, 10000}).
+Inputs: per-run *.manifest.json, paired results (*.results.jsonl/.json), and stored bootstrap indices
+(*bootstrap_indices*.npz) under outputs/ablations/bootstrap_budget/.
+Outputs: per-run metric table (CSV), aggregated CI half-width summary (CSV), and PDF figures.
+Reproducibility: CI estimates are deterministic given the persisted bootstrap indices and input artifacts.
+"""
+
+# ============================================================
+# Bootstrap budget ablation: quantify numerical stability via CI-width vs B.
+# Artifacts are discovered under outputs/ablations/bootstrap_budget/ and
+# summarized into CSV + figures with consistent repo-wide styling.
+# ============================================================
 
 import json
 import re
@@ -41,6 +29,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 FONT_SCALE = 1.35
 
+# Global Matplotlib defaults for consistent typography across the repository figures.
 mpl.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
@@ -56,6 +45,7 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    # Embed fonts to avoid PDF text rendering differences across platforms/viewers.
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -66,6 +56,7 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 
+# Canonical scorer keys expected in results; the analysis intentionally restricts to these.
 SCORE_PRETTY = {
     "lntp": "LNTP",
     "mtp": "MTP",
@@ -77,6 +68,7 @@ MAIN_SCORES = set(SCORE_ORDER)
 
 
 def pretty_score(score_key: str) -> str:
+    """Map internal score keys to display labels used in plots."""
     k = str(score_key).lower()
     return SCORE_PRETTY.get(k, k)
 
@@ -91,6 +83,7 @@ FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "bootstrap_budget"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 
+# NOTE: potential issue: metrics CSVs are written under FIGS_DIR (not ABL_DIR); keep paths stable for downstream tooling.
 OUT_CSV = FIGS_DIR / "analysis_bootstrap_budget_metrics.csv"
 OUT_CSV_SUMMARY = FIGS_DIR / "analysis_bootstrap_budget_summary.csv"
 
@@ -99,12 +92,14 @@ OUT_CSV_SUMMARY = FIGS_DIR / "analysis_bootstrap_budget_summary.csv"
 # Robust save helper (Windows PDF file lock)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
+    """Save a figure, falling back to versioned filenames if the target PDF is locked by the OS/viewer."""
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
     try:
         fig.savefig(outpath, **kwargs)
         return outpath
     except PermissionError:
+        # Common on Windows when the PDF is open in a viewer; use a deterministic suffix scan.
         stem, suffix = outpath.stem, outpath.suffix
         for k in range(2, 50):
             alt = outpath.with_name(f"{stem}_v{k}{suffix}")
@@ -121,6 +116,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # Helpers (same conventions as other ablation analyzers)
 # ============================================================
 def load_jsonl(path: Path):
+    """Load a JSONL file into a list of dicts (ignoring blank lines)."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -131,7 +127,9 @@ def load_jsonl(path: Path):
 
 
 def np_load_first_array(npz_path: Path):
+    """Load an NPZ and return the first matching array using common key conventions."""
     z = np.load(npz_path, allow_pickle=True)
+    # Heuristic key search to tolerate historical naming differences across runs.
     for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if k in z.files:
             return z[k]
@@ -139,13 +137,17 @@ def np_load_first_array(npz_path: Path):
 
 
 def load_bootstrap_indices(boot_path: Path):
+    """Load bootstrap resample indices as an integer array of shape (B, N)."""
     arr = np_load_first_array(boot_path)
+    # Some pipelines store object arrays (e.g., variable-length) that need stacking.
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
 
 
 def find_label_key(example: dict):
+    """Identify the binary label field in a results record using a fixed preference order."""
+    # NOTE: potential issue: relies on a small set of expected keys; new result schemas must extend this list.
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
             return k
@@ -153,6 +155,7 @@ def find_label_key(example: dict):
 
 
 def extract_scores(example: dict):
+    """Extract scorer outputs from a results record using schema-aware and fallback heuristics."""
     # canonical (if ever used)
     if "scores" in example and isinstance(example["scores"], dict):
         return example["scores"]
@@ -163,12 +166,15 @@ def extract_scores(example: dict):
     for k, v in example.items():
         if isinstance(v, (float, int)):
             kk = str(k).lower()
+            # Heuristic: accept numeric fields whose key names contain one of the known scorer identifiers.
             if any(s in kk for s in ["lntp", "mtp", "egh", "hidden"]):
                 scores[kk] = float(v)
     return scores
 
 
 def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    """Compute AUROC and choose the polarity that yields AUROC ≥ 0.5 (direction ∈ {+1, -1})."""
+    # Convention: downstream metrics are computed after orienting scores so that larger => more positive label.
     au = roc_auc_score(y, s)
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
@@ -176,15 +182,18 @@ def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
 
 
 def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap percentile CI for AUROC using precomputed resample indices (skips degenerate resamples)."""
     aucs = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Degenerate resample: AUROC undefined when only one class is present.
         if yy.min() == yy.max():
             continue
         aucs.append(roc_auc_score(yy, ss))
     aucs = np.asarray(aucs, dtype=float)
     if aucs.size == 0:
+        # NOTE: potential issue: all resamples degenerate implies unstable CI estimate; propagate NaNs.
         return np.nan, np.nan, np.nan
     mean = float(np.mean(aucs))
     lo = float(np.quantile(aucs, alpha / 2))
@@ -193,6 +202,7 @@ def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray
 
 
 def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap percentile CI for Spearman correlation using precomputed resample indices (skips NaN/degenerate)."""
     rhos = []
     for idx in boot_idx:
         yy = y[idx]
@@ -200,11 +210,13 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
         if yy.min() == yy.max():
             continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
+        # Correlation may be NaN for constant vectors or insufficient variability.
         if pd.isna(rho):
             continue
         rhos.append(float(rho))
     rhos = np.asarray(rhos, dtype=float)
     if rhos.size == 0:
+        # NOTE: potential issue: all resamples degenerate/NaN implies unstable CI estimate; propagate NaNs.
         return np.nan, np.nan, np.nan
     mean = float(np.mean(rhos))
     lo = float(np.quantile(rhos, alpha / 2))
@@ -217,6 +229,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 #   typical: .../bootstrap_budget/<task_model>/B_1000/*.manifest.json
 # ============================================================
 def parse_task_model_from_folders(manifest_path: Path):
+    """Infer (task, model) from the folder name convention '<task>_<model>' above the B_*/ manifest."""
     # .../bootstrap_budget/medqa_biomistral/B_1000/<file>.manifest.json
     try:
         task_model = manifest_path.parent.parent.name.lower()
@@ -225,10 +238,12 @@ def parse_task_model_from_folders(manifest_path: Path):
         model = parts[1] if len(parts) > 1 else "unknown"
         return task, model
     except Exception:
+        # Silent fallback keeps discovery robust to unexpected directory layouts.
         return "unknown", "unknown"
 
 
 def parse_B(manifest_path: Path, manifest: dict):
+    """Resolve bootstrap budget B from manifest fields or filename/folder conventions; returns -1 if unknown."""
     for k in ["B", "bootstrap_B", "bootstrap_budget"]:
         if k in manifest:
             try:
@@ -255,13 +270,16 @@ def parse_B(manifest_path: Path, manifest: dict):
 
 
 def find_run_files(manifest_path: Path):
+    """Locate the paired results file and persisted bootstrap indices for a given manifest."""
     stem = manifest_path.name.replace(".manifest.json", "")
 
+    # Results are expected as JSONL; tolerate legacy JSON dumps as a fallback.
     results_path = manifest_path.with_name(stem + ".results.jsonl")
     if not results_path.exists():
         alt = manifest_path.with_name(stem + ".results.json")
         results_path = alt if alt.exists() else None
 
+    # Bootstrap indices: prefer the canonical stem; otherwise take the first matching NPZ in the folder.
     boot_path = manifest_path.with_name(stem + ".manifest.bootstrap_indices.npz")
     if not boot_path.exists():
         gl = sorted(manifest_path.parent.glob("*bootstrap_indices*.npz"))
@@ -304,26 +322,32 @@ for task, model, B, manifest_path, results_path, boot_path in runs:
     if not rows:
         continue
 
+    # Label extraction convention: use the first record to decide which key encodes the binary label.
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
+    # Score extraction: compute intersection of per-row score keys to ensure alignment across examples.
     score_dicts = [extract_scores(r) for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())
     keys = sorted([str(k).lower() for k in keys])
 
+    # Restrict to the repo's canonical scorers to avoid plotting incidental numeric fields.
     keys = [k for k in keys if k in MAIN_SCORES]
     if not keys:
         continue
 
+    # Invariant: each score array has shape (N,) aligned to y by construction.
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
     boot_idx = load_bootstrap_indices(boot_path)
 
     for score_key, s_raw in S.items():
+        # Polarity convention: orient each scorer so that AUROC ≥ 0.5 (larger score => more positive label).
         _, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
+        # Deterministic given boot_idx: no RNG here; CI changes only with stored indices or inputs.
         au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
         sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
 
@@ -365,6 +389,7 @@ if df.empty:
 # ============================================================
 # Summary: aggregate CI half-width across tasks/models
 # ============================================================
+# Aggregation is by (score_key, B): each row in df_sum summarizes across all discovered runs.
 g = df.groupby(["score_key", "B"], as_index=False)
 df_sum = g.agg(
     auroc_ci_halfwidth_mean=("auroc_ci95_halfwidth", "mean"),
@@ -381,6 +406,7 @@ print("Wrote:", OUT_CSV_SUMMARY)
 # ============================================================
 # Plotting setup
 # ============================================================
+# Deterministic panel/legend ordering: prefer canonical task/model orders, then append any extras.
 tasks = [t for t in ["medqa", "pubmedqa"] if t in set(df["task"])]
 tasks += sorted([t for t in set(df["task"]) if t not in tasks])
 
@@ -390,6 +416,7 @@ models += sorted([m for m in set(df["model"]) if m not in models])
 score_order = [k for k in SCORE_ORDER if k in set(df["score_key"])]
 score_order += sorted([k for k in set(df["score_key"]) if k not in score_order])
 
+# X-axis budgets: only positive B are treated as valid experimental points.
 Bs = sorted([int(x) for x in set(df["B"]) if int(x) > 0])
 xpos = np.arange(len(Bs), dtype=float)
 
@@ -398,6 +425,7 @@ xpos = np.arange(len(Bs), dtype=float)
 # Option A: CI half-width vs B with tight global y-axis
 # ============================================================
 def plot_ciwidth(metric: str, title: str, outpath: Path):
+    """Plot CI half-width vs B for each task×model panel with a shared global y-axis."""
     # choose column
     if metric == "auroc":
         col = "auroc_ci95_halfwidth"
@@ -407,6 +435,7 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
         ylabel = "95% CI half-width (Spearman ρ)"
 
     # -------- Option A: global tight y-limits (same across panels) --------
+    # Design choice: a shared tight y-range improves cross-panel comparability across tasks/models.
     all_vals = df[col].to_numpy(dtype=float)
     all_vals = all_vals[np.isfinite(all_vals)]
     if all_vals.size == 0:
@@ -444,6 +473,7 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
                 if sub.empty:
                     continue
 
+                # Reindex onto the full Bs grid so missing budgets appear as gaps (NaN) rather than shifting lines.
                 sub = sub.set_index("B").reindex(Bs).reset_index()
                 yv = sub[col].to_numpy(dtype=float)
 
@@ -471,6 +501,7 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
                     fontsize=mpl.rcParams["axes.labelsize"]
                 )
 
+    # Legend contents are taken from the first panel; consistent ordering is driven by score_order.
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(
         handles, labels,
@@ -492,6 +523,7 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
 # Option B: Δ CI half-width vs B=max (typically 10000)
 # ============================================================
 def plot_delta_ci(metric: str, title: str, outpath: Path):
+    """Plot Δ(CI half-width) relative to the maximum B, per task×model panel with a shared global y-axis."""
     if metric == "auroc":
         col = "auroc_ci95_halfwidth"
         ylabel = "Δ 95% CI half-width\n(AUROC) (vs B=max)"
@@ -499,6 +531,7 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
         col = "spearman_ci95_halfwidth"
         ylabel = "Δ 95% CI half-width\n(Spearman ρ) (vs B=max)"
 
+    # Reference is defined as the largest observed B in the discovered runs.
     B_ref = max(Bs) if Bs else None
     if B_ref is None:
         raise RuntimeError("No bootstrap budgets found (Bs empty).")
@@ -506,6 +539,7 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
     # compute delta column (per task-model-score): y(B) - y(B_ref)
     df_delta = df[["task", "model", "score_key", "B", col]].copy()
     ref = df_delta[df_delta["B"] == B_ref][["task", "model", "score_key", col]].rename(columns={col: "ref"})
+    # NOTE: potential issue: missing ref rows yield NaN deltas (left join); plots will show gaps without warning.
     df_delta = df_delta.merge(ref, on=["task", "model", "score_key"], how="left")
     df_delta["delta"] = df_delta[col] - df_delta["ref"]
 
@@ -544,6 +578,7 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
                 sub = sub_tm[sub_tm["score_key"] == score_key].copy()
                 if sub.empty:
                     continue
+                # Align to the global Bs grid to preserve consistent x-coordinates across scorers/panels.
                 sub = sub.set_index("B").reindex(Bs).reset_index()
                 yv = sub["delta"].to_numpy(dtype=float)
                 ax.plot(xpos, yv, marker="o", label=pretty_score(score_key))
