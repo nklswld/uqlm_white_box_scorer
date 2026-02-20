@@ -98,79 +98,20 @@ def build_wide_table(
     return pd.DataFrame(rows)
 
 
-def add_bold_best_per_row_latex(wide: pd.DataFrame) -> pd.DataFrame:
-    """
-    For LaTeX only: bolds the higher mean (not pm) between Mistral/BioMistral for each row.
-    Assumes cells like "0.612 ± 0.031".
-    """
-    out = wide.copy()
 
-    def parse_mean(cell: str) -> float:
-        if cell == "—" or not isinstance(cell, str):
-            return np.nan
-        # split on '±'
-        parts = cell.split("±")
-        try:
-            return float(parts[0].strip())
-        except Exception:
-            return np.nan
-
-    col_m = MODEL_PRETTY["mistral"]
-    col_b = MODEL_PRETTY["biomistral"]
-
-    for i in range(len(out)):
-        m = parse_mean(out.loc[i, col_m])
-        b = parse_mean(out.loc[i, col_b])
-        if np.isnan(m) or np.isnan(b):
-            continue
-        if m > b:
-            out.loc[i, col_m] = r"\textbf{" + out.loc[i, col_m] + "}"
-        elif b > m:
-            out.loc[i, col_b] = r"\textbf{" + out.loc[i, col_b] + "}"
-        else:
-            # tie -> bold none (or both). We'll bold none to keep conservative.
-            pass
-
-    return out
-
-
-# CHANGED (besprochen): optional out_dir, damit Combined in Appendix landet
+# Optional out_dir, damit Combined in Appendix landet
 def save_table_bundle(wide: pd.DataFrame, name: str, caption: str, label: str, out_dir: Path = OUT_DIR):
     """
     Save:
-      - CSV for convenience
-      - LaTeX for paper
-      - LaTeX (bold best per row)
+      - CSV only
     """
     csv_path = out_dir / f"{name}.csv"
-    tex_path = out_dir / f"{name}.tex"
-    tex_bold_path = out_dir / f"{name}_bold.tex"
-
     wide.to_csv(csv_path, index=False)
 
-    latex = wide.to_latex(
-        index=False,
-        escape=False,  # keep ±
-        caption=caption,
-        label=label,
-    )
-    tex_path.write_text(latex, encoding="utf-8")
-
-    wide_bold = add_bold_best_per_row_latex(wide)
-    latex_bold = wide_bold.to_latex(
-        index=False,
-        escape=False,  # keep \textbf and ±
-        caption=caption,
-        label=label,
-    )
-    tex_bold_path.write_text(latex_bold, encoding="utf-8")
-
     print(f"[OK] Wrote: {csv_path}")
-    print(f"[OK] Wrote: {tex_path}")
-    print(f"[OK] Wrote: {tex_bold_path}")
 
 
-# NEW (besprochen): Combined ALL-Task Table pro Scorer (für Anhang)
+# Combined ALL-Task Table pro Scorer (für Anhang)
 def build_all_task_table_per_scorer(
     df: pd.DataFrame,
     value_cols: tuple[str, str, str],  # (mean_col, lo_col, hi_col)
@@ -260,7 +201,7 @@ def main():
             label=f"tab:phase2_spearman_{task}",
         )
 
-    # NEW (besprochen): Combined Tabellen -> Appendix
+    # Combined Tabellen -> Appendix
     for score in SCORER_ORDER:
         # AUROC combined
         wide_au_all = build_all_task_table_per_scorer(
