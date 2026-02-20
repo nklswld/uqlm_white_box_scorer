@@ -355,21 +355,44 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.02, fontsize=plt.rcParams["figure.titlesize"])
+    fig.suptitle(title, y=1.06, fontsize=plt.rcParams["figure.titlesize"])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
 
+def plot_bars_matrix(metric: str, y_lim, outstem: str):
+    """
+    Create a single 2x2 barplot matrix per metric:
+      cols = [mistral, biomistral]
+      rows = [medqa, pubmedqa]
+    """
+    # enforce your requested layout order (if present)
+    tasks_order = [t for t in ["medqa", "pubmedqa"] if t in tasks]
+    models_order = [m for m in ["mistral", "biomistral"] if m in models]
 
-def plot_bars(metric: str, y_lim, outstem: str):
-    for task in tasks:
-        for model in models:
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=(13.0, 9.2),
+        sharey=True
+    )
+
+    x = np.arange(len(CATS), dtype=float)
+
+    for r, task in enumerate(tasks_order):
+        for c, model in enumerate(models_order):
+            ax = axes[r, c]
             sub = df[(df["task"] == task) & (df["model"] == model)].copy()
+
+            # if something missing, keep panel empty but consistent
             if sub.empty:
+                ax.set_xticks(x)
+                ax.set_xticklabels([CAT_PRETTY.get(cat, cat) for cat in CATS])
+                ax.set_ylim(*y_lim)
+                ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+                ax.grid(False)
                 continue
 
             sub = sub.set_index("category").reindex(CATS).reset_index()
-            x = np.arange(len(CATS), dtype=float)
 
             if metric == "auroc":
                 y = sub["auroc_boot_mean"].to_numpy(dtype=float)
@@ -387,23 +410,37 @@ def plot_bars(metric: str, y_lim, outstem: str):
             yerr_low = y - lo
             yerr_high = hi - y
 
-            fig, ax = plt.subplots(figsize=(8.8, 4.9))
             ax.bar(x, y)
             ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
             ax.axhline(hline, linestyle="--", linewidth=1)
 
             ax.set_xticks(x)
-            ax.set_xticklabels([CAT_PRETTY.get(c, c) for c in CATS])
+            ax.set_xticklabels([CAT_PRETTY.get(cat, cat) for cat in CATS])
             ax.set_ylim(*y_lim)
-            ax.set_ylabel(ylabel)
+
+            # Panel title exactly as requested layout implies
             ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+
+            # Only left column gets y-label (cleaner)
+            if c == 0:
+                ax.set_ylabel(ylabel)
 
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
 
-            safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_{task}_{model}.pdf", bbox_inches="tight")
-            plt.close(fig)
-            print("Wrote:", OUT_DIR / f"{outstem}_{metric}_{task}_{model}.pdf")
+    fig.suptitle(
+        f"Ablation: EGH Probe Design (G-only vs E-only vs G+E) — "
+        f"{'AUROC' if metric == 'auroc' else 'Spearman ρ'} ± 95% CI",
+        y=0.965,
+        fontsize=plt.rcParams["figure.titlesize"],
+    )
 
+    # compact but safe spacing (avoid overlaps)
+    fig.tight_layout(rect=[0, 0, 1, 0.975])
+    fig.subplots_adjust(hspace=0.35, wspace=0.12)
+
+    safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_matrix.pdf", bbox_inches="tight")
+    plt.close(fig)
+    print("Wrote:", OUT_DIR / f"{outstem}_{metric}_matrix.pdf")
 
 plot_overlay(
     metric="auroc",
@@ -418,7 +455,7 @@ plot_overlay(
     outpath=OUT_DIR / "fig_ablation_egh_components_spearman_overlay.pdf",
 )
 
-plot_bars(metric="auroc", y_lim=AUROC_YLIM, outstem="fig_ablation_egh_components")
-plot_bars(metric="spearman", y_lim=SPEARMAN_YLIM, outstem="fig_ablation_egh_components")
+plot_bars_matrix(metric="auroc", y_lim=AUROC_YLIM, outstem="fig_ablation_egh_components")
+plot_bars_matrix(metric="spearman", y_lim=SPEARMAN_YLIM, outstem="fig_ablation_egh_components")
 
 print("[OK] EGH components ablation done. Outputs in:", OUT_DIR)

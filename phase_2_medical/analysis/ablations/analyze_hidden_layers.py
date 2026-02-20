@@ -50,14 +50,14 @@ FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "hidden_layers"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Where to store the summary CSV for this ablation
-OUT_CSV = ABL_DIR / "analysis_hidden_layers_metrics.csv"
+OUT_CSV = FIGS_DIR / "analysis_hidden_layers_metrics.csv"
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
 # Plot constants
 # ============================================================
-AUROC_YLIM = (0.45, 0.85)
+AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.10, 0.70)
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
@@ -361,34 +361,74 @@ def _plot_line_ci(ax, x, y, lo, hi, label):
     ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
 
 
-def plot_task_model_auroc(df_sub: pd.DataFrame, task: str, model: str):
-    dfp = df_sub.sort_values("layer")
-    x = dfp["layer"].to_numpy(dtype=int)
-    y = dfp["auroc"].to_numpy(dtype=float)
-    lo = dfp["auroc_ci95_lo"].to_numpy(dtype=float)
-    hi = dfp["auroc_ci95_hi"].to_numpy(dtype=float)
 
-    fig, ax = plt.subplots(figsize=(11.5, 5.2))
-    _plot_line_ci(ax, x, y, lo, hi, label=f"{MODEL_PRETTY.get(model, model)}")
+def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
+    """
+    2x2 matrix:
+      cols = [mistral, biomistral]
+      rows = [medqa, pubmedqa]
+    metric: "auroc" or "spearman"
+    """
+    tasks_order = ["medqa", "pubmedqa"]
+    models_order = ["mistral", "biomistral"]
 
-    ax.axhline(0.5, linestyle="--", linewidth=1)
-    ax.set_ylim(*AUROC_YLIM)
+    fig, axes = plt.subplots(2, 2, figsize=(10.0, 9.2), sharey=True)
+    axes = np.array(axes)
 
-    ax.set_xlabel("Hidden layer index")
-    ax.set_ylabel("AUROC")
-    ax.set_title(f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+    for r, task in enumerate(tasks_order):
+        for c, model in enumerate(models_order):
+            ax = axes[r, c]
+            sub = df_all[(df_all["task"] == task) & (df_all["model"] == model)].copy()
+            if sub.empty:
+                ax.set_axis_off()
+                continue
 
-    # annotate values above CI whiskers
-    yerr_high = hi - y
-    add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", pad_frac=0.02)
+            sub = sub.sort_values("layer")
+            x = sub["layer"].to_numpy(dtype=int)
 
-    ax.legend(frameon=False, title="Model")
+            if metric == "auroc":
+                y = sub["auroc"].to_numpy(dtype=float)
+                lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
+                hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
+                ax.axhline(0.5, linestyle="--", linewidth=1)
+                ax.set_ylim(*AUROC_YLIM)
+                ylabel = "AUROC"
+            else:
+                y = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
+                lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
+                hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
+                ax.axhline(0.0, linestyle="--", linewidth=1)
+                ax.set_ylim(*SPEARMAN_YLIM)
+                ylabel = "Spearman ρ (bootstrap mean)"
 
-    fig.subplots_adjust(top=0.88)
-    out = FIGS_DIR / f"fig_ablation_hidden_layers_auroc_{task}_{model}.pdf"
-    safe_savefig(fig, out, bbox_inches="tight")
+            _plot_line_ci(ax, x, y, lo, hi, label=None)
+            
+
+            # enforce again after all artists
+            if metric == "auroc":
+                ax.set_ylim(*AUROC_YLIM)
+            else:
+                ax.set_ylim(*SPEARMAN_YLIM)
+
+            ax.set_xlabel("Hidden layer index")
+            if c == 0:
+                ax.set_ylabel(ylabel)
+
+            ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+
+    fig.suptitle(
+        "Hidden Layer Sweep — " + ("AUROC ± 95% CI" if metric == "auroc" else "Spearman ρ ± 95% CI"),
+        y=0.97,
+        fontsize=mpl.rcParams["figure.titlesize"],
+    )
+
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.subplots_adjust(hspace=0.45, wspace=0.12)
+
+    safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
-    return out
+    return outpath
+
 
 
 def plot_task_overlay_auroc(df_task: pd.DataFrame, task: str):
@@ -458,13 +498,25 @@ for task in sorted(df["task"].unique()):
     # Overlay plot per task (AUROC)
     written.append(plot_task_overlay_auroc(df_task, task))
 
-    # Optional Spearman overlay per task
+    # Overlay plot per task (Spearman)
     written.append(plot_task_overlay_spearman(df_task, task))
 
-    # Individual plot per task×model
-    for model in sorted(df_task["model"].unique()):
-        df_sub = df_task[df_task["model"] == model].copy()
-        written.append(plot_task_model_auroc(df_sub, task, model))
+# 2x2 matrices (AUROC + Spearman)
+written.append(
+    plot_metric_matrix(
+        df_all=df,
+        metric="auroc",
+        outpath=FIGS_DIR / "fig_ablation_hidden_layers_auroc_matrix.pdf",
+    )
+)
+
+written.append(
+    plot_metric_matrix(
+        df_all=df,
+        metric="spearman",
+        outpath=FIGS_DIR / "fig_ablation_hidden_layers_spearman_matrix.pdf",
+    )
+)
 
 print("[OK] Hidden layer sweep figures written to:", FIGS_DIR)
 for p in written:

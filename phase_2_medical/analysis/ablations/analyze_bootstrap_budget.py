@@ -472,9 +472,17 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
                 )
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=min(4, len(score_order)), frameon=False, title="Scorer")
-    fig.suptitle(title, y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.965])
+    fig.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.972),
+        ncol=min(4, len(score_order)),
+        frameon=False,
+        title="Scorer"
+    )
+    fig.suptitle(title, y=0.993)
+    fig.tight_layout(rect=[0, 0, 1, 0.952])
+    fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -486,10 +494,10 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
 def plot_delta_ci(metric: str, title: str, outpath: Path):
     if metric == "auroc":
         col = "auroc_ci95_halfwidth"
-        ylabel = "Δ 95% CI half-width (AUROC)\n(vs B=max)"
+        ylabel = "Δ 95% CI half-width\n(AUROC) (vs B=max)"
     else:
         col = "spearman_ci95_halfwidth"
-        ylabel = "Δ 95% CI half-width (Spearman ρ)\n(vs B=max)"
+        ylabel = "Δ 95% CI half-width\n(Spearman ρ) (vs B=max)"
 
     B_ref = max(Bs) if Bs else None
     if B_ref is None:
@@ -564,9 +572,17 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
                 )
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=min(4, len(score_order)), frameon=False, title="Scorer")
-    fig.suptitle(title, y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.965])
+    fig.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.972),
+        ncol=min(4, len(score_order)),
+        frameon=False,
+        title="Scorer"
+    )
+    fig.suptitle(title, y=0.993)
+    fig.tight_layout(rect=[0, 0, 1, 0.952])
+    fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)

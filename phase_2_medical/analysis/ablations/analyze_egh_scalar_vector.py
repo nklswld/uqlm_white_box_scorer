@@ -230,8 +230,8 @@ if len(runs) == 0:
 # ============================================================
 CORE_CATS = ["egh_probe_scalar_only", "egh_probe_ge"]
 CORE_PRETTY = {
-    "egh_probe_scalar_only": "Scalar-only probe",
-    "egh_probe_ge": "Vector probe (G+E)",
+    "egh_probe_scalar_only": "Scalar-only\nprobe",
+    "egh_probe_ge": "Vector probe\n(G+E)",
 }
 
 # Optional: individual scalar metrics (if you want Appendix evidence)
@@ -398,22 +398,44 @@ def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.02, fontsize=plt.rcParams["figure.titlesize"])
+    fig.suptitle(title, y=0.995, fontsize=plt.rcParams["figure.titlesize"])
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.subplots_adjust(wspace=0.18)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
 
 
-def plot_bars(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
-              metric: str, y_lim, outstem: str, xtick_rotation=0):
-    for task in tasks:
-        for model in models:
+
+def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
+                     metric: str, y_lim, outstem: str):
+    """
+    Create a single 2x2 matrix per metric:
+      cols = [mistral, biomistral]
+      rows = [medqa, pubmedqa]
+    """
+
+    tasks_order = [t for t in ["medqa", "pubmedqa"] if t in tasks]
+    models_order = [m for m in ["mistral", "biomistral"] if m in models]
+
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=(10.0, 9.2),
+        sharey=True
+    )
+    axes = np.array(axes)
+    x = np.arange(len(cats), dtype=float)
+
+    for r, task in enumerate(tasks_order):
+        for c, model in enumerate(models_order):
+
+            ax = axes[r, c]
             sub = df_sub[(df_sub["task"] == task) & (df_sub["model"] == model)].copy()
+
             if sub.empty:
                 continue
 
             sub = sub.set_index("category").reindex(cats).reset_index()
-            x = np.arange(len(cats), dtype=float)
 
             if metric == "auroc":
                 y = sub["auroc_boot_mean"].to_numpy(dtype=float)
@@ -431,23 +453,40 @@ def plot_bars(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             yerr_low = y - lo
             yerr_high = hi - y
 
-            fig, ax = plt.subplots(figsize=(10.8, 4.9))
             ax.bar(x, y)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3)
+
             ax.axhline(hline, linestyle="--", linewidth=1)
 
             ax.set_xticks(x)
-            ax.set_xticklabels([pretty_map.get(c, c) for c in cats], rotation=xtick_rotation, ha="right" if xtick_rotation else "center")
+            ax.set_xticklabels([pretty_map.get(cat, cat) for cat in cats])
             ax.set_ylim(*y_lim)
-            ax.set_ylabel(ylabel)
-            ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+
+            ax.set_title(
+                f"{TASK_PRETTY.get(task, task)} — "
+                f"{MODEL_PRETTY.get(model, model)}"
+            )
+
+            if c == 0:
+                ax.set_ylabel(ylabel)
 
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
 
-            safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_{task}_{model}.pdf", bbox_inches="tight")
-            plt.close(fig)
-            print("Wrote:", OUT_DIR / f"{outstem}_{metric}_{task}_{model}.pdf")
+    fig.suptitle(
+        f"Ablation: EGH Scalar vs Vector — "
+        f"{'AUROC' if metric == 'auroc' else 'Spearman ρ'} ± 95% CI",
+        y=0.97,
+        fontsize=plt.rcParams["figure.titlesize"],
+    )
 
+    fig.tight_layout(rect=[0, 0, 1, 0.975])
+    fig.subplots_adjust(hspace=0.35, wspace=0.12)
+
+    safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_matrix.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+    print("Wrote:", OUT_DIR / f"{outstem}_{metric}_matrix.pdf")
+    
 
 # ============================================================
 # Core plots: Scalar-only probe vs Vector probe (G+E)
@@ -476,24 +515,23 @@ plot_overlay(
     xtick_rotation=0,
 )
 
-plot_bars(
+
+plot_bars_matrix(
     df_sub=df_core,
     cats=CORE_CATS,
     pretty_map=CORE_PRETTY,
     metric="auroc",
     y_lim=AUROC_YLIM,
     outstem="fig_ablation_egh_scalar_vs_vector",
-    xtick_rotation=0,
 )
 
-plot_bars(
+plot_bars_matrix(
     df_sub=df_core,
     cats=CORE_CATS,
     pretty_map=CORE_PRETTY,
     metric="spearman",
     y_lim=SPEARMAN_YLIM,
     outstem="fig_ablation_egh_scalar_vs_vector",
-    xtick_rotation=0,
 )
 
 
