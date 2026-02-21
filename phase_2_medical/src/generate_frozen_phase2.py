@@ -1,3 +1,11 @@
+"""Generate "frozen" Phase 2 model outputs for PubMedQA and MedQA (4-option) as JSONL.
+
+Inputs: a prepared labeled JSONL for a single task (PubMedQA: question+context+gold; MedQA: question+choices+gold).
+Outputs: JSONL with the standardized schema including raw model generations, constrained prediction, and error flag.
+Designed for reproducible evaluation artifacts: deterministic by default (greedy decoding; temperature=0.0).
+Reproducibility note: enabling sampling (--do_sample) intentionally breaks determinism unless the caller sets RNG seeds.
+"""
+
 # phase_2_medical/src/generate_frozen_phase2.py
 # One generator for Phase 2 frozen outputs: supports PubMedQA + MedQA (4-option).
 #
@@ -46,21 +54,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # IO helpers
 # -----------------------------
 def ensure_parent_dir(p: Path) -> None:
+    """Create the parent directory for a target path if needed."""
     p.parent.mkdir(parents=True, exist_ok=True)
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """Load a JSONL file into a list of dicts, skipping empty lines."""
     rows: List[Dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
-                continue
+                continue  # Ignore blank lines to keep input tolerant to formatting.
             rows.append(json.loads(line))
     return rows
 
 
 def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+    """Write a list of dicts as JSONL (one JSON object per line)."""
     ensure_parent_dir(path)
     with path.open("w", encoding="utf-8") as f:
         for r in rows:
@@ -73,15 +84,17 @@ def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
 VALID_PUBMEDQA = {"yes", "no", "maybe"}
 VALID_MEDQA = {"A", "B", "C", "D"}
 
-# PubMedQA: tolerate "Yes." "No," "Maybe - ..." etc.
+# PubMedQA: accept the first token-level match anywhere in the continuation.
+# NOTE: potential issue: regex will also match "yes/no/maybe" occurring in explanations if the model violates "ONLY".
 _pubmedqa_re = re.compile(r"\b(yes|no|maybe)\b", re.IGNORECASE)
-# MedQA: tolerate "Answer: B" etc.
+# MedQA: accept the first letter match anywhere in the continuation.
+# NOTE: potential issue: regex may match option letters appearing in text (e.g., "Plan B") if generation is verbose.
 _medqa_re = re.compile(r"\b([ABCD])\b", re.IGNORECASE)
 
 
 def build_prompt_pubmedqa(question: str, context: str) -> str:
-    # Keep similar spirit to your PubMedQA setup: constrain to one word.
-    # Using "Final answer:" reduces chatter.
+    """Format a PubMedQA prompt with a strict one-word output contract."""
+    # Heuristic: "Final answer:" anchor reduces chatter and supports fallback stripping in decoding.
     return (
         "You are answering a medical question based on the given abstract.\n"
         "Answer using exactly one word from {yes, no, maybe}.\n"
@@ -93,7 +106,8 @@ def build_prompt_pubmedqa(question: str, context: str) -> str:
 
 
 def build_prompt_medqa(question: str, choices: Dict[str, str]) -> str:
-    # Strict letter-only contract.
+    """Format a MedQA prompt with a strict single-letter output contract."""
+    # Conventions: choices are expected under keys 'A'..'D'; missing keys are rendered as empty strings.
     return (
         "You are answering a multiple-choice medical question.\n"
         "Choose exactly one option letter from {A, B, C, D}.\n"
@@ -109,17 +123,19 @@ def build_prompt_medqa(question: str, choices: Dict[str, str]) -> str:
 
 
 def extract_pred_pubmedqa(text: str) -> Optional[str]:
+    """Extract the constrained PubMedQA label (yes/no/maybe) from a generation."""
     t = (text or "").strip()
-    m = _pubmedqa_re.search(t)
+    m = _pubmedqa_re.search(t)  # Contract: take the first match; downstream treats None as extraction failure.
     if not m:
         return None
     pred = m.group(1).lower()
-    return pred if pred in VALID_PUBMEDQA else None
+    return pred if pred in VALID_PUBMEDQA else None  # Defensive: keep schema stable even if regex changes.
 
 
 def extract_pred_medqa(text: str) -> Optional[str]:
+    """Extract the constrained MedQA option letter (A/B/C/D) from a generation."""
     t = (text or "").strip()
-    m = _medqa_re.search(t)
+    m = _medqa_re.search(t)  # Contract: take the first match; downstream treats None as extraction failure.
     if not m:
         return None
     pred = m.group(1).upper()
@@ -131,6 +147,7 @@ def extract_pred_medqa(text: str) -> Optional[str]:
 # -----------------------------
 @dataclass
 class GenCfg:
+    """Generation configuration for producing short, constrained outputs."""
     model_name: str
     device: str
     batch_size: int
@@ -148,7 +165,9 @@ def generate_batch(
     prompts: List[str],
     cfg: GenCfg,
 ) -> List[str]:
-    # Tokenize with truncation to avoid runaway prompts
+    """Generate continuations for a batch of prompts and return prompt-stripped strings."""
+    # Tokenization invariant: padding+truncation must preserve alignment prompt_i -> output_i.
+    # TODO: verify: truncation does not remove the "Final answer:" anchor for long contexts/questions.
     enc = tok(
         prompts,
         return_tensors="pt",
@@ -164,23 +183,24 @@ def generate_batch(
         do_sample=cfg.do_sample,
         temperature=cfg.temperature,
         top_p=cfg.top_p,
-        use_cache=True,  # generation benefits from cache; short outputs keep it cheap
+        use_cache=True,  # Cache improves throughput; short max_new_tokens keeps memory bounded.
     )
 
-    # Decode; return only the continuation after prompt
+    # Decode model outputs to text; we then isolate the post-prompt continuation for downstream parsing.
     decoded = tok.batch_decode(out, skip_special_tokens=True)
 
     gens: List[str] = []
     for full_text, prompt in zip(decoded, prompts):
-        # If prompt is included, strip it; otherwise keep full
+        # Preferred path: HF decode returns prompt+continuation verbatim, so prefix stripping is exact.
         if full_text.startswith(prompt):
             gens.append(full_text[len(prompt):].strip())
         else:
-            # Fallback: try to find last occurrence of "Final answer:"
+            # Fallback for tokenization/decoding mismatches: anchor on the last "Final answer:" occurrence.
             idx = full_text.lower().rfind("final answer:")
             if idx != -1:
                 gens.append(full_text[idx + len("final answer:"):].strip())
             else:
+                # NOTE: potential issue: if neither prefix nor anchor is found, parsing may capture reasoning text.
                 gens.append(full_text.strip())
     return gens
 
@@ -189,6 +209,7 @@ def generate_batch(
 # Main
 # -----------------------------
 def main() -> None:
+    """CLI entrypoint: load labeled data, run batched generation, and write frozen JSONL."""
     p = argparse.ArgumentParser(description="Generate Phase-2 frozen outputs for PubMedQA or MedQA.")
     p.add_argument("--task", type=str, required=True, choices=["pubmedqa", "medqa"])
     p.add_argument("--input", type=str, required=True, help="Prepared labeled JSONL (pubmedqa or medqa).")
@@ -210,7 +231,7 @@ def main() -> None:
 
     rows = load_jsonl(in_path)
     if args.limit and args.limit > 0:
-        rows = rows[: args.limit]
+        rows = rows[: args.limit]  # Debug-only: alters reported counts; does not change generation behavior.
 
     gen_cfg = GenCfg(
         model_name=args.model,
@@ -223,11 +244,11 @@ def main() -> None:
         prompt_truncation_max_length=int(args.prompt_truncation_max_length),
     )
 
-    # Load model/tokenizer
+    # Load model/tokenizer (Transformers); default settings aim for deterministic decoding unless sampling is enabled.
     tok = AutoTokenizer.from_pretrained(gen_cfg.model_name, use_fast=True)
     if tok.pad_token_id is None:
-        # Ensure padding works for batch generation
-        tok.pad_token = tok.eos_token
+        # Ensure padding works for batch generation; required for tokenizer(..., padding=True).
+        tok.pad_token = tok.eos_token  # NOTE: potential issue: EOS-as-PAD can affect attention for some models.
 
     model = AutoModelForCausalLM.from_pretrained(
         gen_cfg.model_name,
@@ -239,14 +260,15 @@ def main() -> None:
     frozen_rows: List[Dict[str, Any]] = []
 
     def _gold_norm(task: str, g: Any) -> str:
+        """Normalize gold labels to the task's constrained alphabet; fail fast on unexpected values."""
         if task == "pubmedqa":
             gg = str(g).strip().lower()
             if gg not in VALID_PUBMEDQA:
-                raise ValueError(f"Unexpected PubMedQA gold: {g!r}")
+                raise ValueError(f"Unexpected PubMedQA gold: {g!r}")  # Prevent silent metric corruption.
             return gg
         gg = str(g).strip().upper()
         if gg not in VALID_MEDQA:
-            raise ValueError(f"Unexpected MedQA gold: {g!r}")
+            raise ValueError(f"Unexpected MedQA gold: {g!r}")  # Prevent silent metric corruption.
         return gg
 
     n = len(rows)
@@ -279,13 +301,14 @@ def main() -> None:
 
             if args.task == "pubmedqa":
                 pred = extract_pred_pubmedqa(gen)
-                context = str(r.get("context", ""))
-                choices = {}
+                context = str(r.get("context", ""))  # Preserve original context verbatim for auditing.
+                choices = {}  # Schema contract: choices empty for PubMedQA.
             else:
                 pred = extract_pred_medqa(gen)
-                context = ""
-                choices = dict(r.get("choices", {}))
+                context = ""  # Schema contract: context empty for MedQA.
+                choices = dict(r.get("choices", {}))  # Preserve original choices verbatim for auditing.
 
+            # Error definition: missing pred counts as error (extraction failure), as does mismatch vs gold.
             is_error = 1
             if pred is not None:
                 is_error = 0 if pred == gold else 1
@@ -298,8 +321,8 @@ def main() -> None:
                     "context": context,
                     "choices": choices,
                     "gold": gold,
-                    "model_answer": gen,
-                    "pred": pred,
+                    "model_answer": gen,  # Raw continuation used for downstream audits and alternative parsers.
+                    "pred": pred,  # Constrained prediction (or None if extraction failed).
                     "is_error": int(is_error),
                     "meta": {
                         "model": gen_cfg.model_name,
@@ -308,7 +331,7 @@ def main() -> None:
                         "do_sample": gen_cfg.do_sample,
                         "top_p": gen_cfg.top_p,
                         "prompt_truncation_max_length": gen_cfg.prompt_truncation_max_length,
-                        "prompt_chars": len(prompt),
+                        "prompt_chars": len(prompt),  # Lightweight trace for truncation/debugging.
                     },
                 }
             )

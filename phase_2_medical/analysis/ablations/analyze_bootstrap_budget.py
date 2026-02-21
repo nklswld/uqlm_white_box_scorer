@@ -327,7 +327,7 @@ for task, model, B, manifest_path, results_path, boot_path in runs:
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
     # Score extraction: compute intersection of per-row score keys to ensure alignment across examples.
-    score_dicts = [extract_scores(r) for r in rows]
+    score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())

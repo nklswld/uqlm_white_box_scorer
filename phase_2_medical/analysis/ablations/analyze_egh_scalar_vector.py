@@ -110,19 +110,29 @@ def load_jsonl(path: Path):
                 rows.append(json.loads(line))
     return rows
 
-def np_load_first_array(npz_path: Path):
-    """Load the first array from a NPZ, preferring common bootstrap index keys when present."""
-    z = np.load(npz_path, allow_pickle=True)
-    # Heuristic: support multiple historical key names for the same artifact.
-    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
-        if k in z.files:
-            return z[k]
-    return z[z.files[0]]
+def load_bootstrap_indices(boot_path: Path, key: str | None = None):
+    """
+    Load bootstrap resample indices as a dense int array of shape [B, N].
 
-def load_bootstrap_indices(boot_path: Path):
-    """Load bootstrap resample indices as a dense int array of shape [B, N]."""
-    arr = np_load_first_array(boot_path)
-    # Some pipelines store ragged arrays as dtype=object; stack to [B, N] if needed.
+    If `key` is provided, prefer that array from the NPZ (phase-2 saves multiple
+    index matrices per metric, e.g. egh_ge, egh_scalar, ...). Falls back to a
+    reasonable default if the key is missing.
+    """
+    z = np.load(boot_path, allow_pickle=True)
+
+    # Prefer explicit key when available (most important for phase-2 artifacts)
+    if key is not None and key in z.files:
+        arr = z[key]
+    else:
+        # Backward-compat / older artifacts: try common generic names
+        for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+            if k in z.files:
+                arr = z[k]
+                break
+        else:
+            # Last resort: first stored array (kept for robustness, but not ideal)
+            arr = z[z.files[0]]
+
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
@@ -304,7 +314,10 @@ for task, model, manifest_path, results_path, boot_path in runs:
         print(f"[WARN] {results_path.name}: missing keys {missing_core}; skipping this run.")
         continue
 
-    boot_idx = load_bootstrap_indices(boot_path)
+    BOOT_KEY_BY_CAT = {
+        "egh_probe_ge": "egh_ge",
+        "egh_probe_scalar_only": "egh_scalar",
+    }
 
     # Core ablation categories
     for cat in CORE_CATS:
@@ -313,7 +326,9 @@ for task, model, manifest_path, results_path, boot_path in runs:
         au, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
-        # Deterministic bootstrap: indices are read from disk and reused across metrics.
+        boot_key = BOOT_KEY_BY_CAT.get(cat, None)
+        boot_idx = load_bootstrap_indices(boot_path, key=boot_key)
+
         au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
         sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
 
@@ -347,9 +362,11 @@ for task, model, manifest_path, results_path, boot_path in runs:
         au, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
-        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
-        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        boot_idx_scalar = load_bootstrap_indices(boot_path, key="egh_scalar")
 
+        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx_scalar, alpha=0.05)
+        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx_scalar, alpha=0.05)
+        
         records.append({
             "task": task,
             "model": model,
@@ -479,6 +496,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             sub = df_sub[(df_sub["task"] == task) & (df_sub["model"] == model)].copy()
 
             if sub.empty:
+                ax.set_axis_off()
                 continue
 
             # Alignment invariant: reindex to requested category order for consistent x positions.
@@ -501,7 +519,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             yerr_high = hi - y
 
             ax.bar(x, y)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
 
             ax.axhline(hline, linestyle="--", linewidth=1)
 

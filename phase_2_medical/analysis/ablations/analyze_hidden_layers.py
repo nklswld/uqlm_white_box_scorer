@@ -114,24 +114,26 @@ def load_jsonl(path: Path):
                 rows.append(json.loads(line))
     return rows
 
-
-def np_load_first_array(npz_path: Path):
-    """Load the first plausible array from an .npz, using common key conventions for bootstrap indices."""
+def np_load_array_by_preference(npz_path: Path, preferred_keys=None):
+    """
+    Load an array from NPZ by preferred key order; fallback to common conventions; else first array.
+    """
     z = np.load(npz_path, allow_pickle=True)
+    preferred_keys = list(preferred_keys or [])
+    for k in preferred_keys:
+        if k in z.files:
+            return z[k]
     for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if k in z.files:
             return z[k]
     return z[z.files[0]]
 
-
-def load_bootstrap_indices(boot_path: Path):
-    """Load bootstrap indices as int array of shape [B, N] (object arrays are stacked if needed)."""
-    arr = np_load_first_array(boot_path)
+def load_bootstrap_indices(boot_path: Path, preferred_keys=None):
+    """Load bootstrap index matrix as int array of shape [B, N]."""
+    arr = np_load_array_by_preference(boot_path, preferred_keys=preferred_keys)
     if isinstance(arr, np.ndarray) and arr.dtype == object:
-        # Stored as a list/array of arrays; enforce rectangular [B, N].
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
-
 
 def find_label_key(example: dict):
     """Heuristically locate the binary label field in a result row."""
@@ -322,37 +324,43 @@ for task, model, layer, results_path, manifest_path, boot_path in runs:
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
-    score_dicts = [extract_scores(r) for r in rows]
-    # Invariant: use only score keys present for all examples (avoid per-row missingness bias).
-    keys = set(score_dicts[0].keys())
-    for d in score_dicts[1:]:
-        keys &= set(d.keys())
-    keys = sorted(keys)
+    # --- Hidden-probe values: read from top-level field (NaN-safe) ---
+    # Works even if some rows contain None (-> NaN) due to strict=False dropping examples upstream.
+    score_key = PRIMARY_SCORE_KEY
 
-    # Heuristic: prefer the canonical key; otherwise pick the first "hidden*" key deterministically.
-    score_key = None
-    lower_keys = [k.lower() for k in keys]
-    key_map = {k.lower(): k for k in keys}
-    if PRIMARY_SCORE_KEY in lower_keys:
-        score_key = key_map[PRIMARY_SCORE_KEY]
+    s_full = np.array(
+        [
+            (np.nan if (r.get(score_key, None) is None) else float(r.get(score_key)))
+            for r in rows
+        ],
+        dtype=float,
+    )
+
+    # --- Use kept subset if available in NPZ (preferred, matches how hidden bootstraps were generated) ---
+    z = np.load(boot_path, allow_pickle=True)
+    if "hidden_kept_indices" in z.files and "hidden" in z.files:
+        kept = z["hidden_kept_indices"].astype(int)
+        s_raw = s_full[kept]
+        y_use = y[kept]
+        boot_idx = load_bootstrap_indices(boot_path, preferred_keys=["hidden"])
     else:
-        candidates = [k for k in lower_keys if "hidden" in k]
-        if len(candidates) == 0:
-            print(f"[WARN] No hidden-like score found in {results_path.name}. Keys={keys}")
-            continue
-        # TODO: verify: whether choosing candidates[0] is correct when multiple hidden-like keys exist.
-        score_key = key_map[candidates[0]]
+        # Fallback: infer kept via finite mask (less ideal, but still deterministic)
+        mask = np.isfinite(s_full)
+        s_raw = s_full[mask]
+        y_use = y[mask]
+        boot_idx = load_bootstrap_indices(boot_path)  # last resort fallback
 
-    s_raw = np.array([d[score_key] for d in score_dicts], dtype=float)
-    au, direction = auroc_with_best_direction(y, s_raw)
-    # Apply direction so all downstream metrics use a consistent "higher score => more positive class" convention.
+    # Guard: if everything got dropped, skip this run
+    if y_use.size == 0 or np.unique(y_use).size < 2:
+        print(f"[WARN] Hidden score empty/degenerate after masking for {results_path.name}")
+        continue
+
+    # Polarity convention on the actually-used subset
+    au, direction = auroc_with_best_direction(y_use, s_raw)
     s = s_raw * direction
 
-    # Reproducibility: bootstrap indices are precomputed and stored per run (no RNG state in this script).
-    boot_idx = load_bootstrap_indices(boot_path)
-    au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
-
-    rho_mean, rho_lo, rho_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+    au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
+    rho_mean, rho_lo, rho_hi = bootstrap_spearman_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
 
     records.append({
         "task": task,
@@ -370,8 +378,8 @@ for task, model, layer, results_path, manifest_path, boot_path in runs:
         "spearman_ci95_lo": float(rho_lo),
         "spearman_ci95_hi": float(rho_hi),
 
-        "N": int(len(y)),
-        "pos_rate": float(y.mean()),
+        "N": int(len(y_use)),
+        "pos_rate": float(y_use.mean()),
 
         "results_file": str(results_path),
         "manifest_file": str(manifest_path),

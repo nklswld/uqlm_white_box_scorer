@@ -76,6 +76,13 @@ MAIN_SCORES = set(SCORE_ORDER)
 
 BASELINES = {"auroc": 0.5, "spearman": 0.0}
 
+SCORE_TO_BOOTKEY = {
+    "lntp": "lntp",
+    "mtp": "mtp",
+    "egh_probe_oof": "egh",
+    "hidden_probe_oof": "hidden",
+}
+
 
 def pretty_score(k: str) -> str:
     kk = str(k).lower()
@@ -145,11 +152,20 @@ def np_load_first_array(npz_path: Path):
     return z[z.files[0]]
 
 
-def load_bootstrap_indices(boot_path: Path):
-    arr = np_load_first_array(boot_path)
-    if isinstance(arr, np.ndarray) and arr.dtype == object:
-        arr = np.stack(arr, axis=0)
-    return arr.astype(int)
+def load_bootstrap_indices_map(boot_path: Path) -> dict:
+    """
+    Load ALL bootstrap index arrays from the NPZ as a dict.
+    Each key corresponds to a scorer (e.g., lntp, mtp, egh, hidden) and
+    optionally includes hidden_kept_indices.
+    """
+    z = np.load(boot_path, allow_pickle=True)
+    out = {}
+    for k in z.files:
+        arr = z[k]
+        if isinstance(arr, np.ndarray) and arr.dtype == object:
+            arr = np.stack(arr, axis=0)
+        out[str(k).lower()] = arr.astype(int)
+    return out
 
 
 def find_label_key(example: dict):
@@ -160,19 +176,45 @@ def find_label_key(example: dict):
 
 
 def extract_scores(example: dict):
-    # canonical (if present)
-    if "scores" in example and isinstance(example["scores"], dict):
-        return example["scores"]
-    if "wb_scores" in example and isinstance(example["wb_scores"], dict):
-        return example["wb_scores"]
+    """
+    Extract score fields robustly from Phase-2 results rows.
 
-    # fallback: pick numeric fields that look like scores
+    IMPORTANT:
+    - Phase-2 results.jsonl stores scores as top-level keys (lntp, mtp, egh_probe_oof, hidden_probe_oof).
+    - hidden_probe_oof can be null -> must be preserved as np.nan so downstream can subset via hidden_kept_indices.
+    """
     scores = {}
+
+    # 1) Prefer explicit main scorer keys if present (even if None).
+    for k in MAIN_SCORES:
+        if k in example:
+            v = example.get(k, None)
+            scores[str(k).lower()] = (np.nan if v is None else float(v))
+
+    # 2) Also support nested dict schemas (if any run emits them)
+    if "scores" in example and isinstance(example["scores"], dict):
+        for k, v in example["scores"].items():
+            if v is None:
+                scores[str(k).lower()] = np.nan
+            elif isinstance(v, (float, int)):
+                scores[str(k).lower()] = float(v)
+
+    if "wb_scores" in example and isinstance(example["wb_scores"], dict):
+        for k, v in example["wb_scores"].items():
+            if v is None:
+                scores[str(k).lower()] = np.nan
+            elif isinstance(v, (float, int)):
+                scores[str(k).lower()] = float(v)
+
+    # 3) Fallback heuristic (kept, but now it won't drop explicit keys)
     for k, v in example.items():
+        kk = str(k).lower()
+        if kk in scores:
+            continue
         if isinstance(v, (float, int)):
-            kk = str(k).lower()
             if any(s in kk for s in ["lntp", "mtp", "egh", "hidden"]):
                 scores[kk] = float(v)
+
     return scores
 
 
@@ -294,7 +336,7 @@ for task, model, results_path, boot_path in runs:
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
-    score_dicts = [extract_scores(r) for r in rows]
+    score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())
@@ -305,13 +347,48 @@ for task, model, results_path, boot_path in runs:
         continue
 
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
-    boot_idx = load_bootstrap_indices(boot_path)
+
+    boot_map = load_bootstrap_indices_map(boot_path)
+
+    # optional: hidden kept indices (global indices into full dataset)
+    hidden_kept = boot_map.get("hidden_kept_indices", None)
 
     for score_key, s_raw in S.items():
-        au_full, direction = auroc_best_direction(y, s_raw)
+        score_l = score_key.lower()   # <-- FIX: define early
+        s_raw = np.asarray(s_raw, dtype=float)
+
+        # For hidden: direction should be determined on the kept subset (same population as bootstrap)
+        if score_l == "hidden_probe_oof" and ("hidden_kept_indices" in boot_map):
+            hk = boot_map["hidden_kept_indices"]
+            au_full, direction = auroc_best_direction(y[hk], s_raw[hk])
+        else:
+            au_full, direction = auroc_best_direction(y, s_raw)
+
         s = s_raw * direction
 
-        au_dist, sp_dist = bootstrap_metric_distributions(y, s, boot_idx)
+        # pick correct bootstrap indices for this score
+        boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
+
+        if boot_key not in boot_map:
+            print(f"[WARN] No bootstrap indices for score_key={score_key} in {boot_path.name}; skipping.")
+            continue
+
+        boot_idx = boot_map[boot_key]
+
+        # Special case: hidden is bootstrapped on the kept-subset (indices are relative to that subset)
+        if score_l == "hidden_probe_oof":
+            if hidden_kept is None:
+                raise KeyError(
+                    f"hidden_kept_indices missing in {boot_path.name} but required for hidden bootstrap."
+                )
+            # hidden_kept are indices into FULL y/s arrays
+            y_use = y[hidden_kept]
+            s_use = s[hidden_kept]
+        else:
+            y_use = y
+            s_use = s
+
+        au_dist, sp_dist = bootstrap_metric_distributions(y_use, s_use, boot_idx)
 
         # paired deltas vs random
         d_au = au_dist - BASELINES["auroc"]
@@ -417,8 +494,8 @@ def plot_delta(metric: str, outpath: Path):
         # ensure 0 line visible
         y_min = min(y_min, -0.01)
         y_max = max(y_max, 0.01)
-        # give headroom so value labels don't collide with subplot titles
-        y_max = max(y_max, 0.5)
+        # give headroom so value labels don't collide with subplot titles (without blowing up the scale)
+        y_max = y_max + 0.08 * (y_max - y_min + 1e-9)
 
 
     fig, axes = plt.subplots(
@@ -466,7 +543,7 @@ def plot_delta(metric: str, outpath: Path):
                 ax.set_ylabel(ylabel)
 
             if r == 0:
-                ax.set_title(TASK_PRETTY.get(task, task), pad=8)  # vorher default/rcParams -> größer
+                ax.set_title(TASK_PRETTY.get(task, task), pad=18) 
 
             if c == len(tasks) - 1:
                 ax.text(
@@ -481,10 +558,10 @@ def plot_delta(metric: str, outpath: Path):
 
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", pad_frac=0.02)
 
-    fig.suptitle(title, y=0.965)
+    fig.suptitle(title, y=0.98)
 
     fig.subplots_adjust(
-        top=0.88,      # zieht Subplots näher an die Suptitle
+        top=0.93,      # zieht Subplots näher an die Suptitle
         bottom=0.10,
         left=0.08,
         right=0.96,

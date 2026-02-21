@@ -107,18 +107,72 @@ def load_jsonl(path: Path):
                 rows.append(json.loads(line))
     return rows
 
-def np_load_first_array(npz_path: Path):
-    z = np.load(npz_path, allow_pickle=True)
-    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
-        if k in z.files:
-            return z[k]
-    return z[z.files[0]]
+def boot_key_for_score(score_key: str) -> str | None:
+    """
+    Map a score_key to the corresponding bootstrap-index key in the NPZ.
 
-def load_bootstrap_indices(boot_path: Path):
-    arr = np_load_first_array(boot_path)
+    Returns None if we should fall back to legacy single-array conventions.
+    """
+    k = (score_key or "").lower()
+
+    # Hidden probe
+    if "hidden" in k:
+        return "hidden"
+
+    # LNTP / MTP
+    if k == "lntp":
+        return "lntp"
+    if k == "mtp":
+        return "mtp"
+
+    # EGH family
+    if k.startswith("egh_probe_ge"):
+        return "egh_ge"
+    if k.startswith("egh_probe_g_only"):
+        return "egh_g"
+    if k.startswith("egh_probe_e_only"):
+        return "egh_e"
+    if k.startswith("egh_probe_scalar_only"):
+        return "egh_scalar"
+    if "egh" in k:
+        # legacy/default in run_phase2 npz often has `egh` too
+        return "egh"
+
+    return None
+
+
+def load_bootstrap_indices(boot_path: Path, score_key: str | None = None) -> np.ndarray:
+    """
+    Load bootstrap indices as int array with shape (B, N).
+
+    If the NPZ contains multiple arrays (e.g. lntp/mtp/egh_*/hidden),
+    choose the one matching score_key. Otherwise fall back to legacy keys.
+    """
+    z = np.load(boot_path, allow_pickle=True)
+
+    preferred = None
+    if score_key is not None:
+        bk = boot_key_for_score(score_key)
+        if bk is not None and bk in z.files:
+            preferred = z[bk]
+
+    if preferred is None:
+        # Legacy single-array conventions
+        for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+            if k in z.files:
+                preferred = z[k]
+                break
+
+    if preferred is None:
+        # last resort: first entry
+        preferred = z[z.files[0]]
+
+    arr = preferred
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
+
     return arr.astype(int)
+
 
 def find_label_key(example: dict):
     for k in ["is_error", "label", "y", "target", "error"]:
@@ -224,8 +278,22 @@ for manifest_path in sorted(ABL_ROOT.glob("**/*.manifest.json")):
     try:
         pooling = manifest_path.parent.name
         task_model = manifest_path.parent.parent.name
-        task = task_model.split("_")[0].lower()
-        model = task_model.split("_")[1].lower()
+
+        parts = task_model.split("_")
+        if len(parts) < 2:
+            raise ValueError(f"Unexpected folder format: {task_model}")
+
+        task = parts[0].lower()
+        model_raw = "_".join(parts[1:]).lower()
+
+        # Normalize model naming (robust against e.g. bio_mistral_large etc.)
+        if "bio" in model_raw:
+            model = "biomistral"
+        elif "mistral" in model_raw:
+            model = "mistral"
+        else:
+            model = model_raw
+
     except Exception:
         print("[WARN] Could not parse folders for:", manifest_path)
         continue
@@ -261,17 +329,20 @@ for task, model, pooling, manifest_path, results_path, boot_path in runs:
 
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
+  
+    score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
 
-    score_dicts = [extract_scores(r) for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())
-    keys = sorted([str(k).lower() for k in keys])
+    keys = sorted(keys)
 
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
-    boot_idx = load_bootstrap_indices(boot_path)
+    
 
     for score_key, s_raw in S.items():
+        boot_idx = load_bootstrap_indices(boot_path, score_key=score_key)
+        
         au, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
@@ -313,11 +384,10 @@ print("Wrote:", out_csv)
 # ============================================================
 df_hid = df[df["score_key"].str.lower().eq("hidden_probe_oof")].copy()
 if df_hid.empty:
-    # fallback: if your key is different, show available keys
-    print("[WARN] No rows with score_key='hidden_probe_oof'. Available score_key values:")
-    print(sorted(df["score_key"].unique().tolist()))
-    # still proceed with all keys, but this ablation is usually Hidden-only
-    df_hid = df.copy()
+    raise KeyError(
+        "hidden_probe_oof not found in this ablation run. "
+        "Ablation plots are defined for this score only."
+    )
 
 # stable pooling order: prefer known order, then alphabetical remainder
 POOL_ORDER_HINT = ["last_answer", "mean_answer", "mean_all"]

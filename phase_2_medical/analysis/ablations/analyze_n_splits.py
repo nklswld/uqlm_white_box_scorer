@@ -141,8 +141,22 @@ def np_load_first_array(npz_path: Path):
     return z[z.files[0]]
 
 
-def load_bootstrap_indices(boot_path: Path):
-    arr = np_load_first_array(boot_path)
+def load_bootstrap_indices(boot_path: Path, key: str | None = None):
+    z = np.load(boot_path, allow_pickle=True)
+
+    # If a specific key is requested and exists, use it.
+    if key is not None and key in z.files:
+        arr = z[key]
+    else:
+        # Backward-compatible fallback to common single-array conventions
+        for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+            if k in z.files:
+                arr = z[k]
+                break
+        else:
+            # Last resort: first entry (legacy)
+            arr = z[z.files[0]]
+
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
@@ -169,7 +183,7 @@ def extract_scores(example: dict):
 def auroc_with_best_direction(y, s_raw):
     au = roc_auc_score(y, s_raw)
     if au < 0.5:
-        return 1.0 - au, -1.0
+        return roc_auc_score(y, -s_raw), -1.0
     return au, +1.0
 
 
@@ -197,6 +211,8 @@ def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        if len(np.unique(yy)) < 2:
+            continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
         if pd.isna(rho):
             continue
@@ -220,7 +236,8 @@ def infer_task_model_from_manifest(manifest: dict, fallback_path: Path):
             task = "pubmedqa"
     task = (task or "unknown").lower()
 
-    model_name = manifest.get("model_name") or manifest.get("model") or ""
+    cfg = manifest.get("config", {}) if isinstance(manifest.get("config", {}), dict) else {}
+    model_name = manifest.get("model_name") or cfg.get("model_name") or manifest.get("model") or ""
     model = None
     mn = str(model_name).lower()
     if "biomistral" in mn:
@@ -240,13 +257,15 @@ def infer_task_model_from_manifest(manifest: dict, fallback_path: Path):
 
 
 def infer_n_splits(manifest: dict, manifest_path: Path):
-    # Prefer manifest key if present
+    # Prefer manifest/config key if present
+    cfg = manifest.get("config", {}) if isinstance(manifest.get("config", {}), dict) else {}
     for key in ["n_splits", "nsplits", "cv_splits"]:
-        if key in manifest:
-            try:
-                return int(manifest[key])
-            except Exception:
-                pass
+        for src in (manifest, cfg):
+            if key in src:
+                try:
+                    return int(src[key])
+                except Exception:
+                    pass
 
     # Common folder pattern: n_splits_5, nsplits_5, splits_5
     txt = str(manifest_path).lower()
@@ -323,27 +342,43 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
-    score_dicts = [extract_scores(r) for r in rows]
-    keys = set(score_dicts[0].keys())
-    for d in score_dicts[1:]:
-        keys &= set(d.keys())
-    keys = sorted([str(k).lower() for k in keys])
+    # Pull MAIN_SCORES explicitly so hidden_probe_oof can't disappear
+    S = {}
+    for k in MAIN_SCORES:
+        arr = []
+        for r in rows:
+            v = r.get(k, np.nan)
+            if v is None:
+                v = np.nan
+            arr.append(v)
+        S[k] = np.asarray(arr, dtype=float)
 
-    S = {k: np.array([d.get(k, np.nan) for d in score_dicts], dtype=float) for k in keys}
-    S = {k: v for k, v in S.items() if k in MAIN_SCORES}
+    # load indices per score (prevents accidentally using the wrong array from NPZ)
+    # fallback keeps legacy behavior if NPZ does not have these keys
 
-    boot_idx = load_bootstrap_indices(boot_path)
+    NPZ_KEY_MAP = {
+        "lntp": "lntp",
+        "mtp": "mtp",
+        "egh_probe_oof": "egh",          # häufigster Key aus run_phase2 indices
+        "hidden_probe_oof": "hidden",
+    }
 
     for score_key, s_raw in S.items():
-        if not np.isfinite(s_raw).all():
+        boot_idx = load_bootstrap_indices(boot_path, key=NPZ_KEY_MAP.get(score_key))
+        
+        # Only hidden_probe_oof is expected to have missing values (dropped examples).
+        if score_key != "hidden_probe_oof":
+            if not np.isfinite(s_raw).all():
+                # For non-hidden scores, missing values indicate a broken artifact -> skip.
+                continue
+            yy = y
+            ss = s_raw
+        else:
             mask = np.isfinite(s_raw)
             if mask.sum() < 10:
                 continue
             yy = y[mask]
             ss = s_raw[mask]
-        else:
-            yy = y
-            ss = s_raw
 
         au, direction = auroc_with_best_direction(yy, ss)
         s = ss * direction
@@ -478,9 +513,20 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
                 ax.set_title(TASK_PRETTY.get(task, task))
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=len(models), frameon=False, title="Model")
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.95),  # etwas nach unten verschoben
+        ncol=len(models),
+        frameon=False,
+        title="Model",
+    )
+
     fig.suptitle(title, y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.965])
+
+    fig.tight_layout(rect=[0, 0, 1, 0.93])  # mehr Platz oben reservieren
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
 

@@ -24,7 +24,7 @@ from sklearn.metrics import roc_auc_score
 
 
 # ============================================================
-# Style: EXACTLY consistent with phase2_figures.py  (Fix 1)
+# Style: Consistent with phase2_figures.py  
 # ============================================================
 FONT_SCALE = 1.35  # keep consistent
 
@@ -121,19 +121,56 @@ def load_jsonl(path: Path):
     return rows
 
 
-def np_load_first_array(npz_path: Path):
-    z = np.load(npz_path, allow_pickle=True)
-    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
-        if k in z.files:
-            return z[k]
-    return z[z.files[0]]
+def load_bootstrap_npz(npz_path: Path) -> np.lib.npyio.NpzFile:
+    """Open bootstrap NPZ (caller should close)."""
+    return np.load(npz_path, allow_pickle=True)
 
 
-def load_bootstrap_indices(boot_path: Path):
-    arr = np_load_first_array(boot_path)
+def _stack_if_object(arr: np.ndarray) -> np.ndarray:
+    """Stack object-dtype bootstrap index arrays to (B, N)."""
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
+
+
+def get_bootstrap_indices_for_score(z: np.lib.npyio.NpzFile, score_key: str) -> np.ndarray:
+    """
+    Retrieve the correct bootstrap index matrix for a given score key.
+    Expected keys in NPZ often include: lntp, mtp, egh, egh_ge, hidden, ...
+    """
+    sk = str(score_key).lower()
+
+    # Map result-score keys -> NPZ keys (runner convention)
+    key_map = {
+        "lntp": "lntp",
+        "mtp": "mtp",
+        "egh_probe_oof": "egh",          # common stored key
+        "egh_probe_ge": "egh_ge",        # if present
+        "hidden_probe_oof": "hidden",
+    }
+
+    # Try mapped key first
+    cand = key_map.get(sk, sk)
+    if cand in z.files:
+        return _stack_if_object(z[cand])
+
+    # Fallback: try a few common variants
+    for alt in [sk, sk.replace("_probe_oof", ""), sk.replace("_probe", ""), "indices", "boot_idx", "bootstrap_indices", "idx"]:
+        if alt in z.files:
+            return _stack_if_object(z[alt])
+
+    # Final fallback: first array (best-effort) – but warn loudly
+    first = z.files[0]
+    print(f"[WARN] No bootstrap key for score='{sk}' found. Falling back to first NPZ entry: '{first}'")
+    return _stack_if_object(z[first])
+
+
+def get_hidden_kept_indices(z: np.lib.npyio.NpzFile) -> np.ndarray | None:
+    """Return hidden_kept_indices if present (maps kept subset back to full indices)."""
+    for k in ["hidden_kept_indices", "kept_indices", "hidden_kept_full_indices"]:
+        if k in z.files:
+            return np.asarray(z[k], dtype=int)
+    return None
 
 
 def find_label_key(example: dict):
@@ -156,13 +193,12 @@ def extract_scores(example: dict):
 
 def auroc_with_best_direction(y, s_raw):
     """
-    Some scores may be inverted relative to the positive class.
-    We pick the direction that yields AUROC >= 0.5 by flipping sign if needed.
-    Returns (auroc, direction) where direction is +1 or -1.
+    Pick score polarity so AUROC >= 0.5 by flipping sign if needed.
+    Returns (auroc, direction) with direction in {+1, -1}.
     """
     au = roc_auc_score(y, s_raw)
     if au < 0.5:
-        return 1.0 - au, -1.0
+        return roc_auc_score(y, -s_raw), -1.0
     return au, +1.0
 
 
@@ -198,6 +234,8 @@ def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        if len(np.unique(yy)) < 2:
+            continue
         # Spearman via pandas (robust + consistent with your other scripts)
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
         if pd.isna(rho):
@@ -362,50 +400,72 @@ for task, model, seed, manifest_path, results_path, boot_path in runs:
     # keep only main scores for this ablation
     S = {k: v for k, v in S.items() if k in MAIN_SCORES}
 
-    boot_idx = load_bootstrap_indices(boot_path)
+    
+    with load_bootstrap_npz(boot_path) as z:
+        kept_hidden = get_hidden_kept_indices(z)
 
-    for score_key, s_raw in S.items():
-        if not np.isfinite(s_raw).all():
-            # conservative: drop any NaN rows consistently
-            mask = np.isfinite(s_raw)
-            if mask.sum() < 10:
-                continue
-            yy = y[mask]
-            ss = s_raw[mask]
-        else:
-            yy = y
-            ss = s_raw
+        for score_key, s_raw in S.items():
+            sk = str(score_key).lower()
 
-        au, direction = auroc_with_best_direction(yy, ss)
-        s = ss * direction
+            # --- Select correct bootstrap indices for this score ---
+            boot_idx = get_bootstrap_indices_for_score(z, sk)
 
-        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(yy, s, boot_idx, alpha=0.05)
-        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(yy, s, boot_idx, alpha=0.05)
+            # --- Align yy/ss to the bootstrap index length ---
+            if sk == "hidden_probe_oof":
+                # Hidden is computed only on kept subset; NPZ should contain kept indices mapping.
+                if kept_hidden is None:
+                    raise KeyError(
+                        f"NPZ missing hidden_kept_indices but score '{sk}' requires them: {boot_path}"
+                    )
+                yy = y[kept_hidden]
+                ss = s_raw[kept_hidden]
+                # Hidden scores should be finite on kept subset; if not, something is inconsistent.
+                if not np.isfinite(ss).all():
+                    raise ValueError(
+                        f"Hidden scores still contain NaN/inf after applying kept indices. "
+                        f"Run={results_path}"
+                    )
+            else:
+                # For non-hidden scores we expect full coverage (no NaNs).
+                if not np.isfinite(s_raw).all():
+                    # deterministic + correct bootstrap requires stored indices for the same N.
+                    # Safer to SKIP than to silently remap indices (changes the resampling scheme).
+                    print(f"[WARN] Non-hidden score '{sk}' has NaNs; skipping for exact bootstrap reproducibility: {results_path}")
+                    continue
+                yy = y
+                ss = s_raw
 
-        records.append({
-            "task": task,
-            "model": model,
-            "seed": int(seed),
-            "score_key": score_key,
-            "direction": float(direction),
+            # --- Polarity convention + metrics ---
+            au, direction = auroc_with_best_direction(yy, ss)
+            s = ss * direction
 
-            "N": int(len(yy)),
-            "pos_rate": float(np.mean(yy)),
+            au_mean, au_lo, au_hi = bootstrap_ci_from_indices(yy, s, boot_idx, alpha=0.05)
+            sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(yy, s, boot_idx, alpha=0.05)
 
-            "auroc": float(au),
-            "auroc_boot_mean": float(au_mean),
-            "auroc_ci95_lo": float(au_lo),
-            "auroc_ci95_hi": float(au_hi),
+            records.append({
+                "task": task,
+                "model": model,
+                "seed": int(seed),
+                "score_key": sk,
+                "direction": float(direction),
 
-            "spearman_rho_boot_mean": float(sp_mean),
-            "spearman_ci95_lo": float(sp_lo),
-            "spearman_ci95_hi": float(sp_hi),
+                "N": int(len(yy)),
+                "pos_rate": float(np.mean(yy)),
 
-            "manifest_file": str(manifest_path),
-            "results_file": str(results_path),
-            "boot_file": str(boot_path),
-        })
+                "auroc": float(au),
+                "auroc_boot_mean": float(au_mean),
+                "auroc_ci95_lo": float(au_lo),
+                "auroc_ci95_hi": float(au_hi),
 
+                "spearman_rho_boot_mean": float(sp_mean),
+                "spearman_ci95_lo": float(sp_lo),
+                "spearman_ci95_hi": float(sp_hi),
+
+                "manifest_file": str(manifest_path),
+                "results_file": str(results_path),
+                "boot_file": str(boot_path),
+            })
+            
 df = pd.DataFrame(records)
 df = df.sort_values(["task", "model", "score_key", "seed"]).reset_index(drop=True)
 
@@ -483,11 +543,32 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             ax.errorbar(x, yv, yerr=yerr, fmt="none", capsize=3, ecolor="black")
 
             # value labels slightly above errorbar
-            add_pad = 0.02 * (y_lim[1] - y_lim[0])
-            for xi, yi, ei in zip(x, yv, yerr):
-                if np.isfinite(yi):
-                    ax.text(xi, yi + (ei if np.isfinite(ei) else 0.0) + add_pad,
-                            f"{yi:.3f}", ha="center", va="bottom", fontsize=VALUE_LABEL_FONTSIZE)
+            add_pad_up = 0.017 * (y_lim[1] - y_lim[0])
+            add_pad_dn = 0.017 * (y_lim[1] - y_lim[0])
+
+            for xi, score_key, yi, ei in zip(x, score_order, yv, yerr):
+                if not np.isfinite(yi):
+                    continue
+
+                err = (ei if np.isfinite(ei) else 0.0)
+
+                # Regel: bestimmte Labels "unter" den Punkt setzen
+                place_below = (
+                    (task == "medqa" and model == "biomistral" and score_key in ["lntp", "mtp"]) or
+                    (task == "pubmedqa" and model == "biomistral" and score_key == "hidden_probe_oof")
+                )
+
+                if place_below:
+                    y_text = yi - err - add_pad_dn
+                    va = "top"
+                else:
+                    y_text = yi + err + add_pad_up
+                    va = "bottom"
+
+                ax.text(
+                    xi, y_text, f"{yi:.3f}",
+                    ha="center", va=va, fontsize=VALUE_LABEL_FONTSIZE
+                )
 
         ax.axhline(hline, linestyle="--", linewidth=1)
         ax.set_ylim(*y_lim)
@@ -500,11 +581,10 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     axes[0].set_ylabel(ylabel)
     axes[-1].legend(frameon=False, title="Model")
 
-    fig.suptitle(title, y=0.98)
-    fig.tight_layout()
+    fig.suptitle(title, y=0.99)
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
-
 
 plot_overlay(
     metric="auroc",

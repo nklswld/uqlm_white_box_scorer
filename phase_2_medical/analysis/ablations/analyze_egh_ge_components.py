@@ -121,9 +121,21 @@ def np_load_first_array(npz_path: Path):
     return z[z.files[0]]
 
 def load_bootstrap_indices(boot_path: Path):
-    """Return bootstrap index matrix as int ndarray (n_boot, n_samples), stacking object arrays if needed."""
-    arr = np_load_first_array(boot_path)
-    # Some pipelines save a pickled list-of-arrays; standardize to a 2D integer index matrix.
+    """Load bootstrap index matrix (B, N).
+
+    Prefer the EGH-GE indices when present (run_phase2 stores multiple index arrays per run),
+    so all EGH-component comparisons share identical resamples.
+    """
+    z = np.load(boot_path, allow_pickle=True)
+
+    # Prefer a stable key if available; fall back to older single-array conventions.
+    for k in ["egh_ge", "egh", "indices", "boot_idx", "bootstrap_indices", "idx"]:
+        if k in z.files:
+            arr = z[k]
+            break
+    else:
+        arr = z[z.files[0]]
+
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
@@ -229,12 +241,28 @@ if not FINAL_ROOT.exists():
 # Discover runs in final
 # ============================================================
 def parse_task_model_from_prefix(prefix: str):
-    """Parse task/model from a finalized run prefix of form '<task>_<model>.*' (best-effort)."""
-    # prefix example: "medqa_biomistral.B5000"
-    left = prefix.split(".")[0]
-    parts = left.split("_")
+    """Parse task and model from a run filename prefix (robust to underscores and optional tags).
+
+    Expected prefix pattern (before the first dot):
+        <task>_<model>   e.g.  medqa_mistral, pubmedqa_biomistral
+    Anything after the first dot (e.g., run_tag) is ignored for parsing.
+    """
+    base = prefix.split(".")[0]
+    parts = base.split("_")
+    if len(parts) < 2:
+        raise ValueError(f"Cannot parse task/model from prefix: {prefix}")
+
     task = parts[0].lower()
-    model = parts[1].lower() if len(parts) > 1 else "unknown"
+    model_raw = "_".join(parts[1:]).lower()
+
+    # Normalize common families (handles e.g. bio_mistral, biomistral-7b, mistral_instruct, etc.)
+    if "bio" in model_raw:
+        model = "biomistral"
+    elif "mistral" in model_raw:
+        model = "mistral"
+    else:
+        model = model_raw
+
     return task, model
 
 runs = []
@@ -286,7 +314,7 @@ for task, model, manifest_path, results_path, boot_path in runs:
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
     # Score extraction: enforce intersection of available score keys across all rows to preserve alignment.
-    score_dicts = [extract_scores(r) for r in rows]
+    score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())

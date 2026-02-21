@@ -239,7 +239,7 @@ def pretty_score(score_key: str) -> str:
 # ---------------------------------------------------------------------
 # Value labels (3 decimals) above CI whiskers
 # ---------------------------------------------------------------------
-def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high, fmt="{:.3f}", fontsize=None, pad_frac=0.015):
+def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high, fmt="{:.3f}", fontsize=None, pad_frac=0.0135):
     """Annotate values above the upper CI whisker (y + yerr_high) using axis-relative padding."""
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
@@ -523,7 +523,7 @@ def plot_auroc_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
 
         ax.bar(xs, ys, width=width * 0.95, label=model.upper())
         ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}")
+        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}", pad_frac=0.010)
 
     ax.axhline(0.5, linestyle="--", linewidth=1)
     ax.set_xticks(x_base)
@@ -579,13 +579,13 @@ def plot_spearman_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
 
         ax.bar(xs, ys, width=width * 0.95, label=model.upper())
         ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}")
+        add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}", pad_frac=0.010)
 
     ax.axhline(0.0, linestyle="--", linewidth=1)
     ax.set_xticks(x_base)
     ax.set_xticklabels([pretty_score(s) for s in scorers])
     ax.tick_params(axis="x", labelsize=int(11 * FONT_SCALE))
-    ax.set_ylim(*SPEARMAN_YLIM)   
+    ax.set_ylim(*SPEARMAN_YLIM)
     ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
     ax.set_title(title)
     plt.subplots_adjust(right=0.88)
