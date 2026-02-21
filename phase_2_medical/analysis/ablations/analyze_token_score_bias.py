@@ -1,6 +1,7 @@
 # phase_2_medical/analysis/ablations/analyze_token_score_bias.py
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -43,21 +44,33 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 def safe_savefig(fig, outpath: Path, **kwargs):
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fig.savefig(outpath, **kwargs)
-        return outpath
-    except PermissionError:
-        stem, suffix = outpath.stem, outpath.suffix
-        for k in range(2, 50):
-            alt = outpath.with_name(f"{stem}_v{k}{suffix}")
-            try:
-                fig.savefig(alt, **kwargs)
-                print(f"[WARN] Permission denied for {outpath.name} (likely open). Wrote: {alt.name}")
-                return alt
-            except PermissionError:
-                continue
-        raise
 
+    # TEMP: gleiche Endung wie Ziel (pdf bleibt pdf)
+    tmp = outpath.with_name(outpath.stem + ".__tmp__" + outpath.suffix)
+
+    # WICHTIG: format erzwingen, dann ist Endung egal
+    fig.savefig(tmp, format="pdf", **kwargs)
+
+    # Atomar ersetzen mit Retry (Windows locks)
+    for _ in range(15):
+        try:
+            tmp.replace(outpath)
+            return outpath
+        except PermissionError:
+            time.sleep(0.2)
+
+    # Fallback: versioniert
+    stem, suffix = outpath.stem, outpath.suffix
+    for k in range(2, 50):
+        alt = outpath.with_name(f"{stem}_v{k}{suffix}")
+        try:
+            tmp.replace(alt)
+            print(f"[WARN] Permission denied for {outpath.name}. Wrote: {alt.name}")
+            return alt
+        except PermissionError:
+            time.sleep(0.2)
+
+    raise PermissionError(f"Could not write {outpath} (still locked).")
 
 # ============================================================
 # Helper: labels above bars (no CI)
@@ -77,6 +90,7 @@ def add_value_labels(ax, x_positions, y_values, fmt="{:.3f}", fontsize=None):
             ha="center",
             va="bottom",
             fontsize=fontsize,
+            clip_on=False, 
         )
 
 
@@ -101,11 +115,21 @@ def load_jsonl(path: Path):
 # Metrics helpers
 # ============================================================
 def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    y = np.asarray(y).reshape(-1)
+    s = np.asarray(s).reshape(-1)
+
+    # Guard 1: AUROC undefined if only one class present
+    if np.unique(y).size < 2:
+        return np.nan, +1.0
+
+    # Guard 2: constant (or near-constant) scores -> AUROC not meaningful / may error in some cases
+    if float(np.nanstd(s)) < 1e-12:
+        return np.nan, +1.0
+
     au = roc_auc_score(y, s)
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
-    return au, +1.0
-
+    return float(au), +1.0
 
 # ============================================================
 # Paths
@@ -178,8 +202,7 @@ for tb_manifest_path, results_path, ks_path in runs:
         print("[WARN] Empty results:", results_path)
         continue
 
-    # Identify model "tag" for filenames (folder name is usually 'mistral', etc.)
-    model_tag = tb_manifest_path.parent.name  # e.g. mistral/
+    model_tag = tb_manifest_path.parent.name  # z.B. "mistral" (Ordner)
     model_name = tb_manifest.get("model_name", model_tag)
 
     # Load arrays
@@ -287,7 +310,8 @@ def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
     ax.set_title(f"Token Score Bias — Length Normalization (AUROC) — {run_tag}")
 
     # keep your dynamic ylim behavior
-    ax.set_ylim(0.45, max(0.65, float(np.nanmax(y) + 0.02)))
+    top = float(np.nanmax(y)) + 0.06  # vorher 0.02
+    ax.set_ylim(0.45, max(0.70, top))
 
     add_value_labels(ax, x, y, fmt="{:.3f}")
 
@@ -320,7 +344,12 @@ def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
 
     # keep your symmetric ylim behavior
     m = float(np.nanmax(np.abs(np.r_[y, [0.0]])))
-    ax.set_ylim(-(m + 0.05), (m + 0.05))
+    ymin = -(m + 0.10)
+    ymax =  (m + 0.10)
+
+    # extra headroom für Labels (z.B. +8% der Spannweite)
+    headroom = 0.08 * (ymax - ymin)
+    ax.set_ylim(ymin, ymax + headroom)
 
     add_value_labels(ax, x, y, fmt="{:.3f}")
 

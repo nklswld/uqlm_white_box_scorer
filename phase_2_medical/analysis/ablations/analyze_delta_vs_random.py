@@ -495,7 +495,7 @@ def plot_delta(metric: str, outpath: Path):
         y_min = min(y_min, -0.01)
         y_max = max(y_max, 0.01)
         # give headroom so value labels don't collide with subplot titles (without blowing up the scale)
-        y_max = y_max + 0.08 * (y_max - y_min + 1e-9)
+        y_max = y_max + 0.10 * (y_max - y_min + 1e-9)
 
 
     fig, axes = plt.subplots(
@@ -543,7 +543,7 @@ def plot_delta(metric: str, outpath: Path):
                 ax.set_ylabel(ylabel)
 
             if r == 0:
-                ax.set_title(TASK_PRETTY.get(task, task), pad=18) 
+                ax.set_title(TASK_PRETTY.get(task, task), pad=13) 
 
             if c == len(tasks) - 1:
                 ax.text(
@@ -558,15 +558,15 @@ def plot_delta(metric: str, outpath: Path):
 
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", pad_frac=0.02)
 
-    fig.suptitle(title, y=0.98)
+    fig.suptitle(title, y=0.995)
 
     fig.subplots_adjust(
-        top=0.93,      # zieht Subplots näher an die Suptitle
+        top=0.86,      # <- war 0.93
         bottom=0.10,
         left=0.08,
         right=0.96,
-        hspace=0.28,   # vertikaler Abstand zwischen Reihen
-        wspace=0.18    # horizontaler Abstand
+        hspace=0.28,
+        wspace=0.18
     )
 
     safe_savefig(fig, outpath, bbox_inches="tight")

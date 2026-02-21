@@ -168,6 +168,14 @@ def main():
     if not AUROC_CSV.exists():
         raise FileNotFoundError(f"Missing AUROC CSV: {AUROC_CSV}")
     df_au = pd.read_csv(AUROC_CSV)
+    
+    # --- column aliasing (phase2_figures.py writes 'auroc_boot_mean', tables expect 'boot_mean')
+    if "boot_mean" not in df_au.columns:
+        if "auroc_boot_mean" in df_au.columns:
+            df_au = df_au.rename(columns={"auroc_boot_mean": "boot_mean"})
+        elif "auroc" in df_au.columns:
+            # fallback: use point estimate as "boot_mean" if bootstrap mean is not available
+            df_au["boot_mean"] = df_au["auroc"]
 
     # Schema guardrails: fail fast to avoid silently producing malformed tables.
     for c in ["task", "model", "score", "boot_mean", "ci95_lo", "ci95_hi"]:
@@ -178,6 +186,8 @@ def main():
     if not SPEAR_CSV.exists():
         raise FileNotFoundError(f"Missing Spearman CSV: {SPEAR_CSV}")
     df_sp = pd.read_csv(SPEAR_CSV)
+    for k in ["task", "model", "score"]:
+        df_sp[k] = df_sp[k].astype(str).str.lower()
 
     # Schema guardrails: metric column name differs from AUROC; CI columns are shared.
     for c in ["task", "model", "score", "spearman_rho_boot_mean", "ci95_lo", "ci95_hi"]:

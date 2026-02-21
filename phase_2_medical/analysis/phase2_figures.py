@@ -117,22 +117,32 @@ def load_jsonl(path: Path):
                 rows.append(json.loads(line))
     return rows
 
-def np_load_first_array(npz_path: Path):
-    """Load bootstrap indices from common npz key conventions; fallback to the first stored array."""
+def load_bootstrap_map(npz_path: Path):
+    """
+    Load bootstrap indices as a dict: {key -> (n_boot, n_samples) int array}.
+    Backwards compatible: if only a single array exists, expose it under 'indices'.
+    """
     z = np.load(npz_path, allow_pickle=True)
-    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
-        if k in z.files:
-            return z[k]
-    # TODO: verify: relying on z.files[0] is brittle if upstream changes key ordering.
-    return z[z.files[0]]
+    out = {}
 
-def load_bootstrap_indices(boot_path: Path):
-    """Return a 2D int array shaped (n_boot, n_samples) of resample indices."""
-    arr = np_load_first_array(boot_path)
-    if isinstance(arr, np.ndarray) and arr.dtype == object:
-        # Some pipelines store ragged/object arrays; stack into a rectangular (n_boot, n) matrix.
-        arr = np.stack(arr, axis=0)
-    return arr.astype(int)
+    for k in z.files:
+        arr = z[k]
+        if isinstance(arr, np.ndarray) and arr.dtype == object:
+            arr = np.stack(arr, axis=0)
+        # only keep array-like contents
+        if isinstance(arr, np.ndarray):
+            out[str(k).lower()] = arr.astype(int)
+
+    # Backward compatibility: if there is a common single key, alias to 'indices'
+    for alias in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+        if alias in out and "indices" not in out:
+            out["indices"] = out[alias]
+
+    # If it's truly just a single array with some unknown key, also provide 'indices'
+    if "indices" not in out and len(out) == 1:
+        out["indices"] = next(iter(out.values()))
+
+    return out
 
 def find_label_key(example: dict):
     """Infer the binary label field name using a fixed precedence (guards against schema drift)."""
@@ -327,51 +337,94 @@ for task, model, results_path, manifest_path, boot_path in runs:
     S = {k: v for k, v in S.items() if k in MAIN_SCORES}
    
     # Reproducibility: bootstrap indices are loaded verbatim (no RNG in this script).
-    boot_idx = load_bootstrap_indices(boot_path)
+    boot_map = load_bootstrap_map(boot_path)
+    hidden_kept = boot_map.get("hidden_kept_indices", None)
+
+    SCORE_TO_BOOTKEY = {
+        "lntp": "lntp",
+        "mtp": "mtp",
+        "egh_probe_oof": "egh",
+        "hidden_probe_oof": "hidden",
+    }
 
     for score_name, s_raw in S.items():
         # Polarity convention: choose direction so AUROC >= 0.5 when possible; reuse for all derived stats.
-        au, direction = auroc_with_best_direction(y, s_raw)
+        score_l = str(score_name).lower()
+
+        # --- choose bootstrap indices for this score ---
+        boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
+        boot_idx = boot_map.get(boot_key, None)
+
+        # Backward compatibility: if per-score key missing, try global 'indices'
+        if boot_idx is None:
+            boot_idx = boot_map.get("indices", None)
+
+        if boot_idx is None:
+            print(f"[WARN] No bootstrap indices for score={score_name} in {boot_path.name}; skipping.")
+            continue
+
+        # --- choose direction (hidden must be oriented on the kept subset) ---
+        if score_l == "hidden_probe_oof" and hidden_kept is not None:
+            au, direction = auroc_with_best_direction(y[hidden_kept], s_raw[hidden_kept])
+        else:
+            au, direction = auroc_with_best_direction(y, s_raw)
+
         s = s_raw * direction
 
-        mean_b, lo, hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        # --- choose population consistent with bootstrap indices ---
+        if score_l == "hidden_probe_oof":
+            if hidden_kept is None:
+                raise KeyError(f"hidden_kept_indices missing in {boot_path.name} but required for hidden bootstrap.")
+            y_use = y[hidden_kept]
+            s_use = s[hidden_kept]
+        else:
+            y_use = y
+            s_use = s
 
-        records.append({
-            "task": task,
-            "model": model,
-            "score": score_name,
-            "direction": direction,
-            "auroc": float(au),
-            "boot_mean": mean_b,
-            "ci95_lo": lo,
-            "ci95_hi": hi,
-            "N": int(len(y)),
-            "pos_rate": float(y.mean()),
-            "results_file": str(results_path),
-            "boot_file": str(boot_path),
-            "manifest_file": str(manifest_path),
-        })
+        # --- AUROC CI on consistent population ---
+        mean_b, lo, hi = bootstrap_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
 
-        # NOTE: potential issue: Spearman computed on binary labels; interpret as rank association, not calibration.
-        rho = pd.Series(s).corr(pd.Series(y), method="spearman")
+        # --- Spearman (point + CI) on consistent population ---
+        rho = pd.Series(s_use).corr(pd.Series(y_use), method="spearman")
+        
         spearman_records.append({
             "task": task,
             "model": model,
-            "score": score_name,
-            "spearman_rho": float(rho) if not pd.isna(rho) else np.nan,
-            "N": int(len(y)),
-            "pos_rate": float(y.mean()),
-            "manifest_file": str(manifest_path),
+            "score": score_l,
+            "spearman_rho": float(rho),
+            "direction": float(direction),
+            "N": int(len(y_use)),
+            "pos_rate": float(np.mean(y_use)),
         })
 
-        m_rho, lo_rho, hi_rho = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        m_rho, lo_rho, hi_rho = bootstrap_spearman_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
         spearman_ci_rows.append({
             "task": task,
             "model": model,
-            "score": score_name,
+            "score": score_l,
             "spearman_rho_boot_mean": m_rho,
             "ci95_lo": lo_rho,
             "ci95_hi": hi_rho,
+        })
+        
+        # --- store AUROC rows (for AUROC CSV + AUROC plots) ---
+        records.append({
+            "task": task,
+            "model": model,
+            "score": score_l,
+
+            "direction": float(direction),
+            "N": int(len(y_use)),
+            "pos_rate": float(np.mean(y_use)),
+
+            "auroc": float(au),
+            "auroc_boot_mean": float(mean_b),
+            "ci95_lo": float(lo),
+            "ci95_hi": float(hi),
+
+            "manifest_file": str(manifest_path),
+            "results_file": str(results_path),
+            "boot_file": str(boot_path),
         })
 
 df = pd.DataFrame(records).sort_values(["task", "model", "auroc"], ascending=[True, True, False])
