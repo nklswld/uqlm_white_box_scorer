@@ -73,15 +73,25 @@ def mean_ci_str(mean: float, lo: float, hi: float, digits: int = 3) -> str:
     pm = (hi - lo) / 2.0
     return f"{mean:.{digits}f} ± {pm:.{digits}f}"
 
-
-def _get_row(df: pd.DataFrame, task: str, model: str, score: str) -> pd.Series | None:
-    """Return the first matching (task, model, score) row or None if absent."""
+def _get_row(
+    df: pd.DataFrame,
+    task: str,
+    model: str,
+    score: str,
+    prefer_col: str | None = None,
+) -> pd.Series | None:
     r = df[(df["task"] == task) & (df["model"] == model) & (df["score"] == score)]
     if len(r) == 0:
         return None
-    # NOTE: potential issue: duplicates are silently resolved by taking the first row (row-order dependent).
-    return r.iloc[0]
 
+    if len(r) > 1 and prefer_col is not None:
+        print(f"[WARN] Duplicate rows for ({task},{model},{score}) -> taking max {prefer_col}")
+
+    # If duplicates exist, pick deterministically (best by prefer_col).
+    if prefer_col is not None and prefer_col in r.columns and len(r) > 1:
+        r = r.sort_values(prefer_col, ascending=False)
+
+    return r.iloc[0]
 
 def build_wide_table(
     df: pd.DataFrame,
@@ -100,7 +110,7 @@ def build_wide_table(
         row = {"Scorer": SCORER_PRETTY.get(score, score)}
         for model in MODEL_ORDER:
             # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
-            r = _get_row(df, task, model, score)
+            r = _get_row(df, task, model, score, prefer_col=mean_col)
             if r is None:
                 # Missing combinations are rendered explicitly to avoid silent table shape changes.
                 row[MODEL_PRETTY[model]] = "—"
@@ -144,7 +154,7 @@ def build_all_task_table_per_scorer(
         row = {"Task": TASK_PRETTY.get(task, task)}
         for model in MODEL_ORDER:
             # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
-            r = _get_row(df, task, model, score)
+            r = _get_row(df, task, model, score, prefer_col=mean_col)
             if r is None:
                 row[MODEL_PRETTY[model]] = "—"
             else:
@@ -168,6 +178,9 @@ def main():
     if not AUROC_CSV.exists():
         raise FileNotFoundError(f"Missing AUROC CSV: {AUROC_CSV}")
     df_au = pd.read_csv(AUROC_CSV)
+    
+    for k in ["task", "model", "score"]:
+        df_au[k] = df_au[k].astype(str).str.lower()
     
     # --- column aliasing (phase2_figures.py writes 'auroc_boot_mean', tables expect 'boot_mean')
     if "boot_mean" not in df_au.columns:

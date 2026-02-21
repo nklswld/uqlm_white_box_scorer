@@ -39,6 +39,17 @@ mpl.rcParams.update({
     "figure.titlesize": int(14.5 * FONT_SCALE),
 
     "axes.titlepad": 12,
+    
+    # Slightly thicker axes/ticks for print/PDF legibility
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    "xtick.minor.size": 3.0,
+    "ytick.minor.size": 3.0,
 
     # Vector-friendly fonts for downstream editing/review (avoid Type 3 fonts).
     "pdf.fonttype": 42,
@@ -69,6 +80,14 @@ MAIN_SCORES = {"lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"}
 # ---------------------------------------------------------------------
 AUROC_YLIM = (0.45, 0.80)        # Fixed y-range to prevent scale-driven comparability issues across tasks/models.
 SPEARMAN_YLIM = (-0.05, 0.60)    # Fixed y-range for correlation figures (comparability > tight autoscaling).
+
+# ---------------------------------------------------------------------
+# Plot styling knobs (global, for print/readability)
+# ---------------------------------------------------------------------
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 # Canonical display labels for scorer keys (stabilizes figure text across pipelines).
 SCORE_PRETTY = {
@@ -343,10 +362,18 @@ for task, model, results_path, manifest_path, boot_path in runs:
     SCORE_TO_BOOTKEY = {
         "lntp": "lntp",
         "mtp": "mtp",
+
+        # EGH family
         "egh_probe_oof": "egh",
+        "egh_probe_ge": "egh_ge",
+        "egh_probe_g_only": "egh_g",
+        "egh_probe_e_only": "egh_e",
+        "egh_probe_scalar_only": "egh_scalar",
+
+        # Hidden
         "hidden_probe_oof": "hidden",
     }
-
+    
     for score_name, s_raw in S.items():
         # Polarity convention: choose direction so AUROC >= 0.5 when possible; reuse for all derived stats.
         score_l = str(score_name).lower()
@@ -374,12 +401,22 @@ for task, model, results_path, manifest_path, boot_path in runs:
         # --- choose population consistent with bootstrap indices ---
         if score_l == "hidden_probe_oof":
             if hidden_kept is None:
-                raise KeyError(f"hidden_kept_indices missing in {boot_path.name} but required for hidden bootstrap.")
-            y_use = y[hidden_kept]
-            s_use = s[hidden_kept]
+                m = np.isfinite(s)
+                y_use = y[m]
+                s_use = s[m]
+            else:
+                y_use = y[hidden_kept]
+                s_use = s[hidden_kept]
         else:
             y_use = y
             s_use = s
+                    
+        
+        if boot_idx.shape[1] != len(y_use):
+            raise ValueError(
+                f"Bootstrap shape mismatch for {score_l}: boot_idx {boot_idx.shape} vs N={len(y_use)} "
+                f"(boot_file={boot_path.name}, boot_key={boot_key})"
+            )
 
         # --- AUROC CI on consistent population ---
         mean_b, lo, hi = bootstrap_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
@@ -469,8 +506,12 @@ def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
     ax = plt.gca()
     ax.bar(x, yv)
-    ax.errorbar(x, yv, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-    ax.axhline(0.5, linestyle="--", linewidth=1)  # Chance baseline for AUROC.
+    ax.errorbar(
+        x, yv, yerr=[yerr_low, yerr_high],
+        fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+    )
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Chance baseline for AUROC.
     ax.set_xticks(x)
     ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
     ax.set_ylim(*AUROC_YLIM)  # Fixed y-limits: enables visual comparisons across tasks/models.
@@ -504,8 +545,12 @@ def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
     ax = plt.gca()
     ax.bar(x, yv)
-    ax.errorbar(x, yv, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-    ax.axhline(0.0, linestyle="--", linewidth=1)  # Null association baseline for correlation.
+    ax.errorbar(
+        x, yv, yerr=[yerr_low, yerr_high],
+        fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+    )
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Null association baseline for correlation.
     ax.set_xticks(x)
     ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
     ax.set_ylim(*SPEARMAN_YLIM)  # Fixed y-limits: enables visual comparisons across tasks/models.
@@ -575,10 +620,14 @@ def plot_auroc_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
                 yerr_high.append(float(r["ci95_hi"]) - float(r["auroc"]))
 
         ax.bar(xs, ys, width=width * 0.95, label=model.upper())
-        ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+        ax.errorbar(
+            xs, ys, yerr=[yerr_low, yerr_high],
+            fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+            elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+        )
         add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}", pad_frac=0.010)
 
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(x_base)
     ax.set_xticklabels([pretty_score(s) for s in scorers])
     ax.tick_params(axis="x", labelsize=int(11 * FONT_SCALE))
@@ -631,10 +680,14 @@ def plot_spearman_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
                 yerr_high.append(float(r["ci95_hi"]) - float(r["spearman_rho_boot_mean"]))
 
         ax.bar(xs, ys, width=width * 0.95, label=model.upper())
-        ax.errorbar(xs, ys, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
+        ax.errorbar(
+            xs, ys, yerr=[yerr_low, yerr_high],
+            fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+            elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+        )
         add_value_labels_above_ci(ax, xs, ys, yerr_high, fmt="{:.3f}", pad_frac=0.010)
 
-    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(x_base)
     ax.set_xticklabels([pretty_score(s) for s in scorers])
     ax.tick_params(axis="x", labelsize=int(11 * FONT_SCALE))
@@ -686,8 +739,12 @@ def _panel_bar(ax, sub, title):
     yerr = np.vstack([yerr_low, yerr_high])
 
     ax.bar(x, y)
-    ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.errorbar(
+        x, y, yerr=yerr,
+        fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+    )
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(x)
     ax.set_xticklabels([pretty_score(s) for s in SCORE_ORDER], rotation=0, fontsize=14)
     ax.set_ylim(*AUROC_YLIM)
@@ -710,8 +767,12 @@ def _panel_delta(ax, sub, title, y0=-0.05, y1=0.30):
     yerr = np.vstack([yerr_low, yerr_high])
 
     ax.bar(x, y)
-    ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
-    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.errorbar(
+        x, y, yerr=yerr,
+        fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+    )
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(x)
     ax.set_xticklabels([pretty_score(s) for s in SCORE_ORDER], rotation=0, fontsize=14)
     ax.set_ylim(y0, y1)
@@ -771,9 +832,13 @@ for j, model in enumerate(MODEL_ORDER_STORY):
         x = np.arange(len(TASK_ORDER_STORY), dtype=float)
         ax.plot(x, ys, marker="o", label=pretty_score(score))
         yerr = np.vstack([np.array(ys) - np.array(los), np.array(his) - np.array(ys)])
-        ax.errorbar(x, ys, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+        ax.errorbar(
+            x, ys, yerr=yerr,
+            fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+            elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+        )
 
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(np.arange(len(TASK_ORDER_STORY)))
     ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=14)
     ax.set_title(MODEL_PRETTY[model])
@@ -821,8 +886,12 @@ for task in TASK_ORDER_STORY:
 x = np.arange(len(vals), dtype=float)
 
 ax.bar(x, vals)
-ax.errorbar(x, vals, yerr=[err_low, err_high], fmt="none", capsize=3, ecolor="black")
-ax.axhline(0.0, linestyle="--", linewidth=1)
+ax.errorbar(
+    x, vals, yerr=[err_low, err_high],
+    fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+    elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
+)
+ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
 # X labels: rotate slightly + right align to prevent overlap
 ax.set_xticks(x)

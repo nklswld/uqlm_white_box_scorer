@@ -126,23 +126,31 @@ def load_jsonl(path: Path):
     return rows
 
 
-def np_load_first_array(npz_path: Path):
-    """Load an NPZ and return the first matching array using common key conventions."""
+SCORE_TO_BOOTKEY = {
+    "lntp": "lntp",
+    "mtp": "mtp",
+    "egh_probe_oof": "egh_ge", 
+    "hidden_probe_oof": "hidden",
+}
+
+def load_npz_array(npz_path: Path, key: str) -> np.ndarray:
     z = np.load(npz_path, allow_pickle=True)
-    # Heuristic key search to tolerate historical naming differences across runs.
-    for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
-        if k in z.files:
-            return z[k]
-    return z[z.files[0]]
-
-
-def load_bootstrap_indices(boot_path: Path):
-    """Load bootstrap resample indices as an integer array of shape (B, N)."""
-    arr = np_load_first_array(boot_path)
-    # Some pipelines store object arrays (e.g., variable-length) that need stacking.
+    if key not in z.files:
+        raise KeyError(f"[BOOT] key='{key}' not in {npz_path.name}. Available: {list(z.files)}")
+    arr = z[key]
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
-    return arr.astype(int)
+    return arr
+
+def load_bootstrap_indices(boot_path: Path, score_key: str) -> np.ndarray:
+    npz_key = SCORE_TO_BOOTKEY.get(score_key, score_key)
+    return load_npz_array(boot_path, npz_key).astype(int)
+
+def load_hidden_kept_indices(boot_path: Path) -> np.ndarray | None:
+    z = np.load(boot_path, allow_pickle=True)
+    if "hidden_kept_indices" in z.files:
+        return z["hidden_kept_indices"].astype(int)
+    return None
 
 
 def find_label_key(example: dict):
@@ -340,16 +348,31 @@ for task, model, B, manifest_path, results_path, boot_path in runs:
 
     # Invariant: each score array has shape (N,) aligned to y by construction.
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
-    boot_idx = load_bootstrap_indices(boot_path)
 
     for score_key, s_raw in S.items():
-        # Polarity convention: orient each scorer so that AUROC ≥ 0.5 (larger score => more positive label).
-        _, direction = auroc_with_best_direction(y, s_raw)
-        s = s_raw * direction
+        # score-specific bootstrap indices (fixes multi-key NPZ bug)
+        boot_idx = load_bootstrap_indices(boot_path, score_key)
 
-        # Deterministic given boot_idx: no RNG here; CI changes only with stored indices or inputs.
-        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
-        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        # Hidden may have been computed on a kept subset -> align y/s to that subset if available
+        y_use = y
+        s_use = s_raw
+        if score_key == "hidden_probe_oof":
+            kept = load_hidden_kept_indices(boot_path)
+            if kept is not None:
+                y_use = y[kept]
+                s_use = s_raw[kept]
+            else:
+                # fallback if no kept indices stored: drop NaNs/inf consistently
+                m = np.isfinite(s_raw)
+                y_use = y[m]
+                s_use = s_raw[m]
+
+        # Polarity convention: orient each scorer so that AUROC ≥ 0.5
+        _, direction = auroc_with_best_direction(y_use, s_use)
+        s = s_use * direction
+
+        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
+        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
 
         records.append({
             "task": task,
@@ -357,8 +380,8 @@ for task, model, B, manifest_path, results_path, boot_path in runs:
             "B": int(B),
             "score_key": score_key,
             "direction": float(direction),
-            "N": int(len(y)),
-            "pos_rate": float(y.mean()),
+            "N": int(len(y_use)),
+            "pos_rate": float(y_use.mean()) if len(y_use) > 0 else np.nan,
 
             "auroc_boot_mean": float(au_mean),
             "auroc_ci95_lo": float(au_lo),

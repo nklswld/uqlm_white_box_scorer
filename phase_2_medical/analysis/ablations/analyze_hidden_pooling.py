@@ -174,6 +174,13 @@ def load_bootstrap_indices(boot_path: Path, score_key: str | None = None) -> np.
     return arr.astype(int)
 
 
+def load_hidden_kept_indices(boot_path: Path) -> np.ndarray | None:
+    """Return kept indices for hidden probe if stored in NPZ; else None."""
+    z = np.load(boot_path, allow_pickle=True)
+    if "hidden_kept_indices" in z.files:
+        return z["hidden_kept_indices"].astype(int)
+    return None
+
 def find_label_key(example: dict):
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
@@ -342,12 +349,33 @@ for task, model, pooling, manifest_path, results_path, boot_path in runs:
 
     for score_key, s_raw in S.items():
         boot_idx = load_bootstrap_indices(boot_path, score_key=score_key)
-        
-        au, direction = auroc_with_best_direction(y, s_raw)
-        s = s_raw * direction
 
-        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05)
-        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05)
+        # --- NEW: align to kept subset for hidden probe ---
+        y_use = y
+        s_use = s_raw
+        if score_key.lower() == "hidden_probe_oof":
+            kept = load_hidden_kept_indices(boot_path)
+            if kept is not None:
+                y_use = y[kept]
+                s_use = s_raw[kept]
+            else:
+                # fallback: drop NaN/inf consistently if kept indices not available
+                m = np.isfinite(s_raw)
+                y_use = y[m]
+                s_use = s_raw[m]
+
+        # Optional hard guard: catches silent shape mismatches immediately
+        if boot_idx.shape[1] != len(y_use):
+            raise ValueError(
+                f"Bootstrap shape mismatch for {score_key}: "
+                f"boot_idx {boot_idx.shape} vs N={len(y_use)} (file={boot_path.name})"
+            )
+
+        au, direction = auroc_with_best_direction(y_use, s_use)
+        s = s_use * direction
+
+        au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
+        sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
 
         records.append({
             "task": task,
@@ -355,8 +383,8 @@ for task, model, pooling, manifest_path, results_path, boot_path in runs:
             "pooling": pooling,
             "score_key": score_key,
             "direction": float(direction),
-            "N": int(len(y)),
-            "pos_rate": float(y.mean()),
+            "N": int(len(y_use)),
+            "pos_rate": float(y_use.mean()) if len(y_use) > 0 else np.nan,
 
             "auroc": float(au),
             "auroc_boot_mean": float(au_mean),
