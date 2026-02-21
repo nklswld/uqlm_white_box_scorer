@@ -23,7 +23,7 @@ from sklearn.metrics import roc_auc_score
 import matplotlib as mpl
 
 
-FONT_SCALE = 1.35  # Global typography knob; keep fixed for cross-figure comparability in exported PDFs.
+FONT_SCALE = 1.5  # Global typography knob; keep fixed for cross-figure comparability in exported PDFs.
 
 mpl.rcParams.update({
     "font.family": "serif",

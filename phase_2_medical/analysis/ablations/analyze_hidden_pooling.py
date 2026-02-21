@@ -12,7 +12,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: EXACTLY consistent with phase2_figures.py  (Fix 1)
 # ============================================================
-FONT_SCALE = 1.35  # keep consistent
+FONT_SCALE = 1.5  # keep consistent
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -29,6 +29,15 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    # Slightly thicker axes/ticks for print/PDF legibility
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -38,6 +47,14 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 
 AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.05, 0.60)
+
+# ---------------------------------------------------------------------
+# Plot styling knobs (global, for print/readability)
+# ---------------------------------------------------------------------
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
@@ -474,7 +491,8 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
 
             # black whiskers (phase2-like)
             yerr = np.vstack([y - lo, hi - y])
-            ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+            ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
+                        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
 
             # annotate best pooling per model (keep your original idea; NaN-safe)
             if np.isfinite(y).any():
@@ -498,7 +516,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
                     fontsize=VALUE_LABEL_FONTSIZE,
                 )
 
-        ax.axhline(hline, linestyle="--", linewidth=1)
+        ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
         ax.set_xticks(np.arange(len(poolings)))
         ax.set_xticklabels(poolings, rotation=20, ha="right")
         ax.set_ylim(*y_lim)
@@ -547,8 +565,9 @@ def plot_bars(metric: str, y_lim, outstem: str):
 
             fig, ax = plt.subplots(figsize=(10, 4.9))
             ax.bar(x, y)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-            ax.axhline(hline, linestyle="--", linewidth=1)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", 
+                elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
+            ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
             ax.set_xticks(x)
             ax.set_xticklabels(poolings, rotation=20, ha="right")
@@ -611,8 +630,9 @@ def plot_bars_matrix(metric: str, y_lim, outpath: Path):
             yerr_high = hi - y
 
             ax.bar(x, y)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-            ax.axhline(hline, linestyle="--", linewidth=1)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", 
+                elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
+            ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
             ax.set_xticks(x)
             ax.set_xticklabels(poolings, rotation=20, ha="right")

@@ -27,7 +27,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.35
+FONT_SCALE = 1.5
 
 # Global Matplotlib defaults for consistent typography across the repository figures.
 mpl.rcParams.update({
@@ -43,6 +43,16 @@ mpl.rcParams.update({
     "legend.title_fontsize": int(11 * FONT_SCALE),
     "figure.titlesize": int(14.5 * FONT_SCALE),
 
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    "xtick.minor.size": 3.0,
+    "ytick.minor.size": 3.0,
+
     "axes.titlepad": 12,
 
     # Embed fonts to avoid PDF text rendering differences across platforms/viewers.
@@ -52,6 +62,11 @@ mpl.rcParams.update({
 })
 
 VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
+
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
@@ -500,7 +515,13 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
                 sub = sub.set_index("B").reindex(Bs).reset_index()
                 yv = sub[col].to_numpy(dtype=float)
 
-                ax.plot(xpos, yv, marker="o", label=pretty_score(score_key))
+                ax.plot(
+                    xpos, yv,
+                    marker="o",
+                    linewidth=2.0,
+                    markersize=6,
+                    label=pretty_score(score_key),
+                )
 
             ax.set_xticks(xpos)
             ax.set_xticklabels([str(b) for b in Bs])
@@ -606,7 +627,7 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
                 yv = sub["delta"].to_numpy(dtype=float)
                 ax.plot(xpos, yv, marker="o", label=pretty_score(score_key))
 
-            ax.axhline(0.0, linestyle="--", linewidth=1)
+            ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
             ax.set_xticks(xpos)
             ax.set_xticklabels([str(b) for b in Bs])
             ax.set_ylim(global_y_min, global_y_max)

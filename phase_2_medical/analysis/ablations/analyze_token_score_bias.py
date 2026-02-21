@@ -13,7 +13,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.35  # keep consistent with your other scripts
+FONT_SCALE = 1.5  # keep consistent with your other scripts
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -30,6 +30,15 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    # Slightly thicker axes/ticks for print/PDF legibility
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -37,6 +46,13 @@ mpl.rcParams.update({
 
 VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 
+# ---------------------------------------------------------------------
+# Plot styling knobs (global, for print/readability)
+# ---------------------------------------------------------------------
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 # ============================================================
 # Robust save helper (Windows PDF file lock)
@@ -302,7 +318,7 @@ def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
     ax.bar(x, y)
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
     ax.set_xticks(x)
     ax.set_xticklabels(order, rotation=15, ha="right")
@@ -335,7 +351,7 @@ def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
     ax.bar(x, y)
-    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
     ax.set_xticks(x)
     ax.set_xticklabels(order, rotation=15, ha="right")
@@ -379,7 +395,7 @@ def plot_k_sweep(dfk_run: pd.DataFrame, run_tag: str):
     fig, ax = plt.subplots(figsize=(10.5, 4.6), constrained_layout=True)
     ax.plot(k, lntp, marker="o", label="LNTP (AUROC)")
     ax.plot(k, mtp, marker="o", label="MTP (AUROC)")
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
     ax.set_xlabel("Answer-span k (first k answer tokens)")
     ax.set_ylabel("AUROC (descriptive)")

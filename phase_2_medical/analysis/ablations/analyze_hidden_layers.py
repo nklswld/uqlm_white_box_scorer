@@ -23,7 +23,7 @@ import matplotlib as mpl
 # ============================================================
 # Plot styling (kept consistent with phase2_figures.py for cross-figure comparability)
 # ============================================================
-FONT_SCALE = 1.35  # reviewer-facing typography scaling; keep in sync with related figure scripts
+FONT_SCALE = 1.5 # reviewer-facing typography scaling; keep in sync with related figure scripts
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -40,6 +40,15 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    # Slightly thicker axes/ticks for print/PDF legibility
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    
     # Embed editable text in vector backends (important for camera-ready figure tweaks).
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
@@ -67,6 +76,14 @@ ABL_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================
 AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.10, 0.70)
+
+# ---------------------------------------------------------------------
+# Plot styling knobs (global, for print/readability)
+# ---------------------------------------------------------------------
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
@@ -402,9 +419,9 @@ def _plot_line_ci(ax, x, y, lo, hi, label):
     # errorbars in black for contrast
     yerr_low = y - lo
     yerr_high = hi - y
-    ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-
-
+    ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", 
+                elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
+    
 
 def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
     """
@@ -431,14 +448,14 @@ def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
                 y = sub["auroc_boot_mean"].to_numpy(dtype=float)
                 lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
                 hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
-                ax.axhline(0.5, linestyle="--", linewidth=1)  # chance-level reference for AUROC
+                ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # chance-level reference for AUROC
                 ax.set_ylim(*AUROC_YLIM)
                 ylabel = "AUROC"
             else:
                 y = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
                 lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
                 hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
-                ax.axhline(0.0, linestyle="--", linewidth=1)  # null association reference
+                ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # null association reference
                 ax.set_ylim(*SPEARMAN_YLIM)
                 ylabel = "Spearman ρ (bootstrap mean)"
 
@@ -486,7 +503,7 @@ def plot_task_overlay_auroc(df_task: pd.DataFrame, task: str):
         hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
         _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
 
-    ax.axhline(0.5, linestyle="--", linewidth=1)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_ylim(*AUROC_YLIM)
     ax.set_xlabel("Hidden layer index")
     ax.set_ylabel("AUROC")
@@ -515,7 +532,7 @@ def plot_task_overlay_spearman(df_task: pd.DataFrame, task: str):
         hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
         _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
 
-    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_ylim(*SPEARMAN_YLIM)
     ax.set_xlabel("Hidden layer index")
     ax.set_ylabel("Spearman ρ (bootstrap mean)")

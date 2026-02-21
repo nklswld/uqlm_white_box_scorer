@@ -22,7 +22,7 @@ from sklearn.metrics import roc_auc_score
 # Style: consistent with phase2_figures.py
 # ============================================================
 # Global Matplotlib style for figure-level comparability across scripts (font sizes, PDF embedding, etc.).
-FONT_SCALE = 1.35
+FONT_SCALE = 1.5
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -39,6 +39,16 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.1,
+    "ytick.major.width": 1.1,
+    "xtick.major.size": 4.5,
+    "ytick.major.size": 4.5,
+    "xtick.minor.width": 1.0,
+    "ytick.minor.width": 1.0,
+    "xtick.minor.size": 3.0,
+    "ytick.minor.size": 3.0,
+
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -49,6 +59,11 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 # Fixed y-limits improve between-panel comparability; update only when expanding expected metric range.
 AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.05, 0.60)
+
+ERRORBAR_CAPSIZE = 4
+ERRORBAR_LINEWIDTH = 1.6
+ERRORBAR_CAPTHICK = 1.6
+BASELINE_LINEWIDTH = 1.4
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
@@ -417,9 +432,10 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             ax.plot(x, y, marker="o", label=MODEL_PRETTY.get(model, model))
             yerr = np.vstack([y - lo, hi - y])
             # NOTE: potential issue: errorbars are computed for all x; NaNs may be ignored or warn depending on backend.
-            ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=3, ecolor="black")
+            ax.errorbar(x, y, yerr=yerr, fmt="none", capsize=ERRORBAR_CAPSIZE,
+                        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK, ecolor="black")
 
-        ax.axhline(hline, linestyle="--", linewidth=1)
+        ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
         ax.set_xticks(x)
         ax.set_xticklabels([CAT_PRETTY.get(c, c) for c in CATS], rotation=0, ha="center")
         ax.set_ylim(*y_lim)
@@ -483,8 +499,9 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             yerr_high = hi - y
 
             ax.bar(x, y)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=3, ecolor="black")
-            ax.axhline(hline, linestyle="--", linewidth=1)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE,
+                        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK, ecolor="black")
+            ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
             ax.set_xticks(x)
             ax.set_xticklabels([CAT_PRETTY.get(cat, cat) for cat in CATS])
