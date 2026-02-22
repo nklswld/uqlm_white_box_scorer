@@ -489,13 +489,13 @@ def plot_delta(metric: str, outpath: Path):
         lo_col = "delta_auroc_ci95_lo"
         hi_col = "delta_auroc_ci95_hi"
         ylabel = r"$\Delta$AUROC (vs. 0.5)"
-        title = r"Ablation: $\Delta$ vs Random Baseline (paired) — $\Delta$AUROC $\pm$ 95% CI"
+        title = r"$\Delta$ vs Random Baseline (paired) — $\Delta$AUROC $\pm$ 95% CI"
     else:
         mean_col = "delta_spearman_boot_mean"
         lo_col = "delta_spearman_ci95_lo"
         hi_col = "delta_spearman_ci95_hi"
         ylabel = r"$\Delta$ Spearman $\rho$ (vs. 0.0)"
-        title = r"Ablation: $\Delta$ vs Random Baseline (paired) — $\Delta\rho$ $\pm$ 95% CI"
+        title = r"$\Delta$ vs Random Baseline (paired) — $\Delta\rho$ $\pm$ 95% CI"
 
     # global y-limits (tight, symmetric-ish around 0)
     vals = df[[lo_col, hi_col]].to_numpy(dtype=float).reshape(-1)
@@ -515,7 +515,7 @@ def plot_delta(metric: str, outpath: Path):
 
     fig, axes = plt.subplots(
         len(models), len(tasks),
-        figsize=(6.8 * len(tasks), 3.9 * len(models)),
+        figsize=(5.6 * len(tasks), 3.9 * len(models)),
         sharey=True
     )
 
@@ -546,7 +546,7 @@ def plot_delta(metric: str, outpath: Path):
             yerr_low = y - lo
             yerr_high = hi - y
 
-            ax.bar(x, y)
+            ax.bar(x, y, width=0.65)
             ax.errorbar(
                 x, y, yerr=[yerr_low, yerr_high],
                 fmt="none",
@@ -580,10 +580,14 @@ def plot_delta(metric: str, outpath: Path):
 
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", pad_frac=0.02)
 
-    fig.suptitle(title, y=0.995)
+    fig.suptitle(
+        title,
+        y=0.995,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.15
+    )
 
     fig.subplots_adjust(
-        top=0.86,      # <- war 0.93
+        top=0.86,     
         bottom=0.10,
         left=0.08,
         right=0.96,

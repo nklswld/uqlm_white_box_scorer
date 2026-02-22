@@ -427,7 +427,7 @@ models += sorted([m for m in set(df["model"]) if m not in models])
 def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
                  metric: str, y_lim, title: str, outpath: Path, xtick_rotation=0):
     """Overlay line plots per model with shaded 95% CIs, faceted by task."""
-    fig, axes = plt.subplots(1, len(tasks), figsize=(6.2 * len(tasks), 4.8), sharey=True)
+    fig, axes = plt.subplots(1, len(tasks), figsize=(5.2 * len(tasks), 4.8), sharey=True)
     if len(tasks) == 1:
         axes = [axes]
 
@@ -473,9 +473,9 @@ def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=0.995, fontsize=plt.rcParams["figure.titlesize"])
-    fig.tight_layout(rect=[0, 0, 1, 0.985])
-    fig.subplots_adjust(wspace=0.18)
+    fig.suptitle(title, y=0.992, fontsize=mpl.rcParams["figure.titlesize"])
+    fig.tight_layout(rect=[0, 0, 1, 0.99])
+    fig.subplots_adjust(wspace=0.28)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -498,7 +498,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
 
     fig, axes = plt.subplots(
         2, 2,
-        figsize=(10.0, 9.2),
+        figsize=(9.2, 9.2),
         sharey=True
     )
     axes = np.array(axes)
@@ -533,7 +533,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             yerr_low = y - lo
             yerr_high = hi - y
 
-            ax.bar(x, y)
+            ax.bar(x, y, width=0.65)
             ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
 
             ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
@@ -542,10 +542,9 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             ax.set_xticklabels([pretty_map.get(cat, cat) for cat in cats])
             ax.set_ylim(*y_lim)
 
-            ax.set_title(
-                f"{TASK_PRETTY.get(task, task)} — "
-                f"{MODEL_PRETTY.get(model, model)}"
-            )
+            task_title = TASK_PRETTY.get(task, task)
+            task_title = task_title.replace("(Yes/No/Maybe)", "(Yes/No/Maybe)\n")
+            ax.set_title(f"{task_title} — {MODEL_PRETTY.get(model, model)}")
 
             if c == 0:
                 ax.set_ylabel(ylabel)
@@ -554,14 +553,14 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
 
     fig.suptitle(
-        f"Ablation: EGH Scalar vs Vector — "
+        f"EGH Scalar vs Vector — "
         f"{'AUROC' if metric == 'auroc' else 'Spearman ρ'} ± 95% CI",
         y=0.97,
-        fontsize=plt.rcParams["figure.titlesize"],
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.1,
     )
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
-    fig.subplots_adjust(hspace=0.35, wspace=0.12)
+    fig.subplots_adjust(hspace=0.60, wspace=0.12)
 
     safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_matrix.pdf", bbox_inches="tight")
     plt.close(fig)
@@ -580,7 +579,7 @@ plot_overlay(
     pretty_map=CORE_PRETTY,
     metric="auroc",
     y_lim=AUROC_YLIM,
-    title="Ablation: EGH Scalar-only vs Vector Probe — AUROC ± 95% CI",
+    title="EGH Scalar-only vs Vector Probe — AUROC ± 95% CI",
     outpath=OUT_DIR / "fig_ablation_egh_scalar_vs_vector_auroc_overlay.pdf",
     xtick_rotation=0,
 )
@@ -591,7 +590,7 @@ plot_overlay(
     pretty_map=CORE_PRETTY,
     metric="spearman",
     y_lim=SPEARMAN_YLIM,
-    title="Ablation: EGH Scalar-only vs Vector Probe — Spearman ρ ± 95% CI",
+    title="EGH Scalar-only vs Vector Probe — Spearman ρ ± 95% CI",
     outpath=OUT_DIR / "fig_ablation_egh_scalar_vs_vector_spearman_overlay.pdf",
     xtick_rotation=0,
 )

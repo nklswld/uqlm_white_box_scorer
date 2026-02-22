@@ -531,7 +531,7 @@ x = np.arange(len(score_order), dtype=float)
 
 
 def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
-    fig, axes = plt.subplots(1, len(tasks), figsize=(6.2 * len(tasks), 4.8), sharey=True)
+    fig, axes = plt.subplots(1, len(tasks), figsize=(6.6 * len(tasks), 4.8), sharey=True)
     if len(tasks) == 1:
         axes = [axes]
 
@@ -597,7 +597,11 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.grid(False)
 
     axes[0].set_ylabel(ylabel)
-    axes[-1].legend(frameon=False, title="Model")
+    axes[0].legend(
+        frameon=False,
+        title="Model",
+        loc="upper left"
+    )
 
     fig.suptitle(title, y=0.99)
     fig.tight_layout(rect=[0, 0, 1, 0.985])

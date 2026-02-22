@@ -472,16 +472,21 @@ def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
             if c == 0:
                 ax.set_ylabel(ylabel)
 
-            ax.set_title(f"{TASK_PRETTY.get(task, task)} — {MODEL_PRETTY.get(model, model)}")
+            task_title = TASK_PRETTY.get(task, task)
+            task_title = task_title.replace("(Yes/No/Maybe)", "(Yes/No/Maybe)\n")
+
+            ax.set_title(
+                f"{task_title} — {MODEL_PRETTY.get(model, model)}"
+            )
 
     fig.suptitle(
         "Hidden Layer Sweep — " + ("AUROC ± 95% CI" if metric == "auroc" else "Spearman ρ ± 95% CI"),
-        y=0.97,
-        fontsize=mpl.rcParams["figure.titlesize"],
+        y=0.975,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.13,
     )
 
     fig.tight_layout(rect=[0, 0, 1, 0.985])
-    fig.subplots_adjust(hspace=0.45, wspace=0.12)
+    fig.subplots_adjust(hspace=0.60, wspace=0.12)
 
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
@@ -507,7 +512,10 @@ def plot_task_overlay_auroc(df_task: pd.DataFrame, task: str):
     ax.set_ylim(*AUROC_YLIM)
     ax.set_xlabel("Hidden layer index")
     ax.set_ylabel("AUROC")
-    ax.set_title(f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Model overlay)")
+    ax.set_title(
+        f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Model overlay)",
+        pad=18 
+    )
 
     ax.legend(frameon=False, title="Model")
     fig.subplots_adjust(top=0.88)
@@ -536,7 +544,10 @@ def plot_task_overlay_spearman(df_task: pd.DataFrame, task: str):
     ax.set_ylim(*SPEARMAN_YLIM)
     ax.set_xlabel("Hidden layer index")
     ax.set_ylabel("Spearman ρ (bootstrap mean)")
-    ax.set_title(f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Spearman overlay)")
+    ax.set_title(
+        f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Spearman overlay)",
+        pad=18
+    )
 
     ax.legend(frameon=False, title="Model")
     fig.subplots_adjust(top=0.88)

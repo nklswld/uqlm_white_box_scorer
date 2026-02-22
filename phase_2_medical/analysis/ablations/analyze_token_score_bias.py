@@ -317,7 +317,7 @@ def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
     y = sub["auroc"].to_numpy(dtype=float)
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
-    ax.bar(x, y)
+    ax.bar(x, y, width=0.65)
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
     ax.set_xticks(x)
@@ -350,7 +350,7 @@ def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
     y = sub["spearman_score_vs_len"].to_numpy(dtype=float)
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
-    ax.bar(x, y)
+    ax.bar(x, y, width=0.65)
     ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
     ax.set_xticks(x)
@@ -421,7 +421,11 @@ def plot_k_sweep(dfk_run: pd.DataFrame, run_tag: str):
             fontsize=VALUE_LABEL_FONTSIZE
         )
 
-    ax.legend(frameon=False)
+    ax.legend(
+        frameon=False,
+        loc="lower right",
+        bbox_to_anchor=(0.98, 0.12)
+    )
 
     out = OUT_DIR / f"fig_appendix_token_score_bias_k_sweep_{run_tag}.pdf"
     safe_savefig(fig, out, bbox_inches="tight")

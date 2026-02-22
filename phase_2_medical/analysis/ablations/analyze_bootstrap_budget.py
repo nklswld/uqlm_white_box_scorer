@@ -489,7 +489,7 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
     # grid: rows=models, cols=tasks
     fig, axes = plt.subplots(
         len(models), len(tasks),
-        figsize=(6.3 * len(tasks), 3.7 * len(models)),
+        figsize=(5.3 * len(tasks), 3.7 * len(models)),
         sharey=True
     )
     if len(models) == 1 and len(tasks) == 1:
@@ -555,8 +555,8 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
         frameon=False,
         title="Scorer"
     )
-    fig.suptitle(title, y=0.993)
-    fig.tight_layout(rect=[0, 0, 1, 0.952])
+    fig.suptitle(title, y=0.998)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
@@ -601,7 +601,7 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
 
     fig, axes = plt.subplots(
         len(models), len(tasks),
-        figsize=(6.3 * len(tasks), 3.7 * len(models)),
+        figsize=(5.3 * len(tasks), 3.7 * len(models)),
         sharey=True
     )
     if len(models) == 1 and len(tasks) == 1:
@@ -659,8 +659,8 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
         frameon=False,
         title="Scorer"
     )
-    fig.suptitle(title, y=0.993)
-    fig.tight_layout(rect=[0, 0, 1, 0.952])
+    fig.suptitle(title, y=0.998)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)

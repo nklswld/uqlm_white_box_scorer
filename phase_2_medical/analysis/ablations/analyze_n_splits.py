@@ -482,7 +482,7 @@ x = np.arange(len(splits_order), dtype=float)
 def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     # grid: rows = scorers, cols = tasks
     fig, axes = plt.subplots(len(score_order), len(tasks),
-                             figsize=(6.3 * len(tasks), 3.6 * len(score_order)),
+                             figsize=(5.3 * len(tasks), 3.6 * len(score_order)),
                              sharey=False)
     if len(score_order) == 1 and len(tasks) == 1:
         axes = np.array([[axes]])
@@ -536,15 +536,15 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.95),  # etwas nach unten verschoben
+        bbox_to_anchor=(0.5, 0.95),
         ncol=len(models),
         frameon=False,
         title="Model",
     )
 
-    fig.suptitle(title, y=0.995)
+    fig.suptitle(title, y=0.992)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.93])  # mehr Platz oben reservieren
+    fig.tight_layout(rect=[0, 0, 1, 0.945])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
 

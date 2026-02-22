@@ -443,7 +443,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.06, fontsize=plt.rcParams["figure.titlesize"])
+    fig.suptitle(title, y=1.04, fontsize=mpl.rcParams["figure.titlesize"])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -460,7 +460,7 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
 
     fig, axes = plt.subplots(
         2, 2,
-        figsize=(13.0, 9.2),
+        figsize=(11.2, 9.2),
         sharey=True
     )
 
@@ -498,7 +498,7 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             yerr_low = y - lo
             yerr_high = hi - y
 
-            ax.bar(x, y)
+            ax.bar(x, y, width=0.65)
             ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE,
                         elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK, ecolor="black")
             ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
@@ -517,15 +517,15 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
 
     fig.suptitle(
-        f"Ablation: EGH Probe Design (G-only vs E-only vs G+E) — "
+        f"EGH Probe Design (G-only vs E-only vs G+E) — "
         f"{'AUROC' if metric == 'auroc' else 'Spearman ρ'} ± 95% CI",
-        y=0.965,
-        fontsize=plt.rcParams["figure.titlesize"],
+        y=0.955,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.1,
     )
 
     # Layout: reserve headroom for the suptitle and avoid inter-panel label overlaps.
-    fig.tight_layout(rect=[0, 0, 1, 0.975])
-    fig.subplots_adjust(hspace=0.35, wspace=0.12)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.subplots_adjust(hspace=0.35, wspace=0.11)
 
     safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_matrix.pdf", bbox_inches="tight")
     plt.close(fig)
@@ -534,13 +534,13 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
 plot_overlay(
     metric="auroc",
     y_lim=AUROC_YLIM,
-    title="Ablation: EGH Probe Design (G-only vs E-only vs G+E) — AUROC ± 95% CI",
+    title="EGH Probe Design (G-only vs E-only vs G+E) — AUROC ± 95% CI",
     outpath=OUT_DIR / "fig_ablation_egh_components_auroc_overlay.pdf",
 )
 plot_overlay(
     metric="spearman",
     y_lim=SPEARMAN_YLIM,
-    title="Ablation: EGH Probe Design (G-only vs E-only vs G+E) — Spearman ρ ± 95% CI",
+    title="EGH Probe Design (G-only vs E-only vs G+E) — Spearman ρ ± 95% CI",
     outpath=OUT_DIR / "fig_ablation_egh_components_spearman_overlay.pdf",
 )
 
