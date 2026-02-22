@@ -738,7 +738,7 @@ def _panel_bar(ax, sub, title):
     yerr_high = hi - y
     yerr = np.vstack([yerr_low, yerr_high])
 
-    ax.bar(x, y)
+    ax.bar(x, y, width=0.65)
     ax.errorbar(
         x, y, yerr=yerr,
         fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
@@ -766,7 +766,7 @@ def _panel_delta(ax, sub, title, y0=-0.05, y1=0.30):
     yerr_high = hi - y
     yerr = np.vstack([yerr_low, yerr_high])
 
-    ax.bar(x, y)
+    ax.bar(x, y, width=0.65)
     ax.errorbar(
         x, y, yerr=yerr,
         fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
@@ -792,7 +792,7 @@ for i, task in enumerate(TASK_ORDER_STORY):
         ax = axes[i, j]
         sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
         _panel_bar(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
-fig.suptitle("Phase 2: White-box scorers across Task × Model (AUROC ± 95% CI)", y=0.98, fontsize=plt.rcParams["figure.titlesize"])
+fig.suptitle("Phase 2: White-box scorers across Task × Model (AUROC ± 95% CI)", y=0.995, fontsize=plt.rcParams["figure.titlesize"])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_1_grid_task_model_auroc.pdf", bbox_inches="tight")
 plt.close(fig)
 
@@ -804,7 +804,7 @@ for i, task in enumerate(TASK_ORDER_STORY):
         ax = axes[i, j]
         sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
         _panel_delta(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
-fig.suptitle("Phase 2: Effect size vs random (ΔAUROC ± 95% CI)", y=0.98, fontsize=plt.rcParams["figure.titlesize"])
+fig.suptitle("Phase 2: Effect size vs random (ΔAUROC ± 95% CI)", y=0.995, fontsize=plt.rcParams["figure.titlesize"])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_2_grid_task_model_delta_auroc.pdf", bbox_inches="tight")
 plt.close(fig)
 
@@ -840,13 +840,13 @@ for j, model in enumerate(MODEL_ORDER_STORY):
 
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(np.arange(len(TASK_ORDER_STORY)))
-    ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=14)
+    ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=int(13 * FONT_SCALE))
     ax.set_title(MODEL_PRETTY[model])
     ax.set_ylabel("AUROC")
     ax.set_ylim(*AUROC_YLIM)
 
 axes[0].legend(frameon=False, title="Scorer")
-fig.suptitle("Task-format effect: scorer performance shifts from MCQ → Yes/No", y=1.08, fontsize=plt.rcParams["figure.titlesize"])
+fig.suptitle("Task-format effect: scorer performance shifts from MCQ → Yes/No", y=1.12, fontsize=plt.rcParams["figure.titlesize"])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_3_task_format_effect_lines.pdf", bbox_inches="tight")
 plt.close(fig)
 
@@ -885,7 +885,7 @@ for task in TASK_ORDER_STORY:
 
 x = np.arange(len(vals), dtype=float)
 
-ax.bar(x, vals)
+ax.bar(x, vals, width=0.65)
 ax.errorbar(
     x, vals, yerr=[err_low, err_high],
     fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
@@ -899,7 +899,7 @@ ax.set_xticklabels(x_labels, rotation=20, ha="right")
 ax.tick_params(axis="x", pad=6)  # Minor padding improves PDF legibility for multi-line labels.
 
 ax.set_ylabel("ΔAUROC (Mistral − BioMistral)")
-ax.set_title("Model specialization effect (approx. CI via bounds)")
+ax.set_title("Model specialization effect (approx. CI via bounds)", pad=18)
 
 # Dynamic y-limits with headroom so top label never collides/clips.
 ymin = min(np.array(vals) - np.array(err_low))
@@ -908,7 +908,7 @@ pad = 0.12 * (ymax - ymin + 1e-9)  # Headroom even for near-constant ranges.
 ax.set_ylim(ymin - 0.15 * pad, ymax + pad)
 
 # Slightly larger value labels only for this plot (dense x labels + small vertical range).
-add_value_labels_above_ci(ax, x, vals, err_high, fmt="{:.3f}", fontsize=14, pad_frac=0.02)
+add_value_labels_above_ci(ax, x, vals, err_high, fmt="{:.3f}", fontsize=int(12 * FONT_SCALE), pad_frac=0.025)
 
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_4_model_diff_delta_auroc.pdf", bbox_inches="tight")
 plt.close(fig)
