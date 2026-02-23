@@ -63,7 +63,7 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 # ============================================================
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 ABL_DIR = ROOT / "outputs" / "ablations" / "hidden_layers"
-FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "hidden_layers"
+FIGS_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "hidden_layers"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Where to store the summary CSV for this ablation (single consolidated artifact for downstream analysis).

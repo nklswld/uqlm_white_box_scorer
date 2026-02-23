@@ -18,7 +18,7 @@
 #      (per-setting metrics with bootstrap CI, for LNTP/MTP/EGH/Hidden)
 #  - phase_2_medical/outputs/ablations/n_splits/analysis_n_splits_summary.csv
 #      (per task×model×score: mean/std across n_splits settings)
-#  - phase_2_medical/outputs/figs/ablations/n_splits/
+#  - phase_2_medical/outputs/figures_tables/ablations/n_splits/
 #      fig_ablation_n_splits_auroc_overlay.pdf
 #      fig_ablation_n_splits_spearman_overlay.pdf
 #      fig_ablation_n_splits_auroc_by_task_model.pdf (optional detailed panel)
@@ -107,7 +107,7 @@ def pretty_score(k: str) -> str:
 ROOT = Path(__file__).resolve().parents[2]  # ./phase_2_medical
 
 ABL_DIR = ROOT / "outputs" / "ablations" / "n_splits"
-FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "n_splits"
+FIGS_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "n_splits"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -376,7 +376,7 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
     NPZ_KEY_MAP = {
         "lntp": "lntp",
         "mtp": "mtp",
-        "egh_probe_oof": "egh",          # häufigster Key aus run_phase2 indices
+        "egh_probe_oof": "egh",
         "hidden_probe_oof": "hidden",
     }
 

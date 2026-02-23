@@ -8,7 +8,7 @@
 #      (per-seed metrics with bootstrap CI, for LNTP/MTP/EGH/Hidden)
 #  - phase_2_medical/outputs/ablations/oof_seeds/analysis_oof_seeds_summary.csv
 #      (mean/std across seeds, per task×model×score)
-#  - phase_2_medical/outputs/figs/ablations/oof_seeds/
+#  - phase_2_medical/outputs/figures_tables/ablations/oof_seeds/
 #      fig_ablation_oof_seeds_auroc_overlay.pdf
 #      fig_ablation_oof_seeds_spearman_overlay.pdf
 
@@ -95,7 +95,7 @@ ROOT = Path(__file__).resolve().parents[2]  # ./phase_2_medical
 
 # Expected ablation folder
 ABL_DIR = ROOT / "outputs" / "ablations" / "oof_seeds"
-FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "oof_seeds"
+FIGS_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "oof_seeds"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 

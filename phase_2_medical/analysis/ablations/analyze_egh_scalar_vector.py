@@ -236,7 +236,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 # ============================================================
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 FINAL_ROOT = ROOT / "outputs" / "final"
-OUT_DIR = ROOT / "outputs" / "figs" / "ablations" / "egh_scalar_vs_vector"
+OUT_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "egh_scalar_vs_vector"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print("ROOT =", ROOT)

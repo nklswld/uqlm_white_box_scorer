@@ -19,8 +19,8 @@
 #     - phase_2_medical/outputs/ablations/delta_vs_random/analysis_delta_vs_random_metrics.csv
 #     - phase_2_medical/outputs/ablations/delta_vs_random/analysis_delta_vs_random_summary.csv
 #   Figures:
-#     - phase_2_medical/outputs/figs/ablations/delta_vs_random/fig_ablation_delta_vs_random_auroc.pdf
-#     - phase_2_medical/outputs/figs/ablations/delta_vs_random/fig_ablation_delta_vs_random_spearman.pdf
+#     - phase_2_medical/outputs/figures_tables/ablations/delta_vs_random/fig_ablation_delta_vs_random_auroc.pdf
+#     - phase_2_medical/outputs/figures_tables/ablations/delta_vs_random/fig_ablation_delta_vs_random_spearman.pdf
 #
 # Style/structure: aligned with phase2_figures.py and the other ablation analyzers.
 
@@ -282,7 +282,7 @@ def ci_from_dist(dist: np.ndarray, alpha=0.05):
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 FINAL_DIR = ROOT / "outputs" / "final"
 
-FIGS_OUT = ROOT / "outputs" / "figs" / "ablations" / "delta_vs_random"
+FIGS_OUT = ROOT / "outputs" / "figures_tables" / "ablations" / "delta_vs_random"
 FIGS_OUT.mkdir(parents=True, exist_ok=True)
 
 # CSVs sollen ebenfalls hier gespeichert werden

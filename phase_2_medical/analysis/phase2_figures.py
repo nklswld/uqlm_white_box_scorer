@@ -3,8 +3,7 @@ Phase 2 figure/metric generator for medical QA evaluation runs.
 
 Reads per-run artifacts under outputs/final/: *.manifest.json, matching *.results.jsonl, and
 *.manifest.bootstrap_indices.npz (precomputed resample indices).
-Writes (i) CSV summaries (AUROC+CI, Spearman ρ+CI) into outputs/final/ and (ii) publication-ready
-PDF figures into outputs/figs/ (including grouped and "story" panels).
+Writes publication-ready PDF figures into outputs/figures_tables/figures_general (including grouped and "story" panels).
 Metric convention: score polarity is automatically chosen so AUROC >= 0.5 when possible; the same
 polarity is reused for Spearman to keep a consistent "higher is better" interpretation.
 Determinism: no RNG is used here—bootstrap CIs are percentile intervals over precomputed indices,
@@ -65,12 +64,8 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE) # Value labels above CI whiskers; in
 # ---------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]   # Repo root for phase_2_medical; used to resolve outputs deterministically.
 FINAL = ROOT / "outputs" / "final"
-FIGS = ROOT / "outputs" / "figs"
+FIGS = ROOT / "outputs" / "figures_tables" / "figures_general"
 FIGS.mkdir(parents=True, exist_ok=True)
-
-# Metrics CSV outputs are written alongside FINAL run artifacts for traceability/review.
-METRICS_OUT = FINAL
-METRICS_OUT.mkdir(parents=True, exist_ok=True)
 
 # Main scorers reported in Phase 2 (other numeric fields in results.jsonl are ignored for aggregation/plots).
 MAIN_SCORES = {"lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"}
@@ -444,7 +439,7 @@ for task, model, results_path, manifest_path, boot_path in runs:
             "ci95_hi": hi_rho,
         })
         
-        # --- store AUROC rows (for AUROC CSV + AUROC plots) ---
+        # --- store AUROC rows (for AUROC plots) ---
         records.append({
             "task": task,
             "model": model,
@@ -466,30 +461,13 @@ for task, model, results_path, manifest_path, boot_path in runs:
 
 df = pd.DataFrame(records).sort_values(["task", "model", "auroc"], ascending=[True, True, False])
 
-out_csv = METRICS_OUT / "phase2_metrics_auroc_ci.csv"
-df.to_csv(out_csv, index=False)
-print("Wrote:", out_csv)
-
-# Defensive: keep explicit filter even though upstream already restricts to MAIN_SCORES.
+# Keep dataframes in-memory for plotting (no CSV output)
 df_main = df[df["score"].isin(MAIN_SCORES)].copy()
-out_csv_filtered = METRICS_OUT / "phase2_metrics_auroc_ci_filtered.csv"
-df_main.to_csv(out_csv_filtered, index=False)
-print("Wrote:", out_csv_filtered)
 
 df_spear_main = pd.DataFrame(spearman_records)
 df_spear_ci = pd.DataFrame(spearman_ci_rows)
-# Alignment invariant: merge CIs on (task, model, score); left join preserves point estimates even if CI is NaN.
 df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], how="left")
 
-out_spear = METRICS_OUT / "phase2_metrics_spearman_rho.csv"
-df_spear_main.to_csv(out_spear, index=False)
-print("Wrote:", out_spear)
-
-out_spear_filtered = METRICS_OUT / "phase2_metrics_spearman_rho_filtered.csv"
-df_spear_main[df_spear_main["score"].isin(MAIN_SCORES)].to_csv(out_spear_filtered, index=False)
-print("Wrote:", out_spear_filtered)
-
-# ---------------------------------------------------------------------
 # Plot: AUROC bar + CI (labels above CI; errorbars black)
 # ---------------------------------------------------------------------
 def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):

@@ -240,7 +240,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 # Project root inference: this file is expected under phase_2_medical/analysis/ablations/.
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 FINAL_ROOT = ROOT / "outputs" / "final"
-OUT_DIR = ROOT / "outputs" / "figs" / "ablations" / "egh_components"
+OUT_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "egh_components"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print("ROOT =", ROOT)

@@ -1,7 +1,0 @@
-run,model_name,k,n_valid,n_skipped,lntp_auc,mtp_auc,k_sweep_manifest
-mistral,mistralai/Mistral-7B-Instruct-v0.2,1,297,3,0.5255828721763586,0.5614850766578972,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json
-mistral,mistralai/Mistral-7B-Instruct-v0.2,2,300,0,0.5658918174141073,0.5677363438375038,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json
-mistral,mistralai/Mistral-7B-Instruct-v0.2,3,300,0,0.5755589137294991,0.5677807902573448,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json
-mistral,mistralai/Mistral-7B-Instruct-v0.2,5,300,0,0.6175607804791324,0.5679363527267879,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json
-mistral,mistralai/Mistral-7B-Instruct-v0.2,10,300,0,0.6233610382683674,0.5677585670474244,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json
-mistral,mistralai/Mistral-7B-Instruct-v0.2,20,300,0,0.618694164185075,0.5674696653184587,C:\Users\nikla\Desktop\Peojekt\uqlm_white_box_scorer\phase_2_medical\outputs\ablations\token_score_bias\mistral\k_sweep.manifest.json

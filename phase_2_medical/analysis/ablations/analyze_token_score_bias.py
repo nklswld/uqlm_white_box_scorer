@@ -152,7 +152,7 @@ def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
 # ============================================================
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 ABL_ROOT = ROOT / "outputs" / "ablations" / "token_score_bias"
-OUT_DIR = ROOT / "outputs" / "figs" / "ablations" / "token_score_bias"
+OUT_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "token_score_bias"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print("ROOT =", ROOT)

@@ -1,0 +1,3 @@
+Task,Mistral,BioMistral
+MedQA,0.01 ± 0.06,0.00 ± 0.06
+PubMedQA,0.37 ± 0.06,0.17 ± 0.06

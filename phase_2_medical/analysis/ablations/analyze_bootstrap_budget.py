@@ -94,7 +94,7 @@ def pretty_score(score_key: str) -> str:
 ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
 
 ABL_DIR = ROOT / "outputs" / "ablations" / "bootstrap_budget"
-FIGS_DIR = ROOT / "outputs" / "figs" / "ablations" / "bootstrap_budget"
+FIGS_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "bootstrap_budget"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 

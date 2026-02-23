@@ -4,7 +4,7 @@ Reads aggregated Phase 2 metrics (bootstrap mean and 95% CI bounds) from CSV fil
 and emits publication-ready wide tables for per-task comparisons and appendix-style
 combined-task views (per scorer).
 Inputs: metrics CSVs under outputs/final (AUROC and Spearman rho summaries).
-Outputs: CSV tables under outputs/tables and outputs/tables/appendix.
+Outputs: CSV tables under outputs/tables/tables_general and outputs/tables/tables_general appendix.
 Determinism: deterministic given fixed CSV contents; no randomness or sampling here.
 """
 
@@ -12,6 +12,8 @@ Determinism: deterministic given fixed CSV contents; no randomness or sampling h
 import pandas as pd
 from pathlib import Path
 import numpy as np
+import json
+from sklearn.metrics import roc_auc_score
 
 
 # ----------------------------
@@ -20,7 +22,7 @@ import numpy as np
 # Base directory for upstream Phase 2 metric summaries (produced elsewhere).
 BASE = (Path(__file__).resolve().parents[1] / "outputs" / "final")
 # Output directory for generated table CSVs.
-OUT_DIR = (Path(__file__).resolve().parents[1] / "outputs" / "tables")
+OUT_DIR = (Path(__file__).resolve().parents[1] / "outputs" / "figures_tables" / "tables_general")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Appendix outputs: "combined" tables spanning tasks for a fixed scorer.
@@ -28,8 +30,8 @@ APPENDIX_DIR = OUT_DIR / "appendix"
 APPENDIX_DIR.mkdir(parents=True, exist_ok=True)
 
 # Metric summary inputs (must contain task/model/score keys plus metric + CI columns).
-AUROC_CSV = BASE / "phase2_metrics_auroc_ci_filtered.csv"
-SPEAR_CSV = BASE / "phase2_metrics_spearman_rho_filtered.csv"
+AUROC_CSV = OUT_DIR / "phase2_metrics_auroc_ci.csv"
+SPEAR_CSV = OUT_DIR / "phase2_metrics_spearman_rho.csv"
 
 
 # ----------------------------
@@ -169,11 +171,299 @@ def build_all_task_table_per_scorer(
     return pd.DataFrame(rows)
 
 
+
+# ----------------------------
+# Metric CSV generation (moved from phase2_figures.py)
+# ----------------------------
+MAIN_SCORES = {"lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"}
+
+def load_jsonl(path: Path):
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+def load_bootstrap_map(npz_path: Path):
+    z = np.load(npz_path, allow_pickle=True)
+    out = {}
+    for k in z.files:
+        arr = z[k]
+        if isinstance(arr, np.ndarray) and arr.dtype == object:
+            arr = np.stack(arr, axis=0)
+        if isinstance(arr, np.ndarray):
+            out[str(k).lower()] = arr.astype(int)
+
+    for alias in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
+        if alias in out and "indices" not in out:
+            out["indices"] = out[alias]
+
+    if "indices" not in out and len(out) == 1:
+        out["indices"] = next(iter(out.values()))
+
+    return out
+
+def find_label_key(example: dict):
+    for k in ["is_error", "label", "y", "target", "error"]:
+        if k in example:
+            return k
+    raise KeyError("No label key found (expected is_error/label/y/target/error).")
+
+def extract_scores(example: dict):
+    if "scores" in example and isinstance(example["scores"], dict):
+        return example["scores"]
+    if "wb_scores" in example and isinstance(example["wb_scores"], dict):
+        return example["wb_scores"]
+
+    scores = {}
+    for k, v in example.items():
+        if isinstance(v, (float, int)):
+            kk = str(k).lower()
+            if any(s in kk for s in ["lntp", "mtp", "egh", "hidden"]):
+                scores[kk] = float(v)
+    return scores
+
+def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    # AUROC undefined if only one class is present
+    if np.min(y) == np.max(y):
+        return np.nan, +1.0
+
+    au = roc_auc_score(y, s)
+    if au < 0.5:
+        return roc_auc_score(y, -s), -1.0
+    return au, +1.0
+
+def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    aucs = []
+    for idx in boot_idx:
+        yy = y[idx]
+        ss = s[idx]
+        if yy.min() == yy.max():
+            continue
+        aucs.append(roc_auc_score(yy, ss))
+
+    aucs = np.asarray(aucs, dtype=float)
+    if aucs.size == 0:
+        return np.nan, np.nan, np.nan
+
+    mean = float(np.mean(aucs))
+    lo = float(np.quantile(aucs, alpha / 2))
+    hi = float(np.quantile(aucs, 1 - alpha / 2))
+    return mean, lo, hi
+
+def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    rhos = []
+    for idx in boot_idx:
+        yy = y[idx]
+        ss = s[idx]
+        if yy.min() == yy.max():
+            continue
+        rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
+        if pd.isna(rho):
+            continue
+        rhos.append(float(rho))
+
+    rhos = np.asarray(rhos, dtype=float)
+    if rhos.size == 0:
+        return np.nan, np.nan, np.nan
+
+    mean = float(np.mean(rhos))
+    lo = float(np.quantile(rhos, alpha / 2))
+    hi = float(np.quantile(rhos, 1 - alpha / 2))
+    return mean, lo, hi
+
+def infer_task_model_from_manifest(manifest_path: Path):
+    m = json.loads(manifest_path.read_text(encoding="utf-8"))
+    task = str(m.get("task", "")).lower()
+    config = m.get("config", {})
+    model_name = str(config.get("model_name", "")).lower()
+    model = "biomistral" if "bio" in model_name else "mistral"
+    return task, model
+
+def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
+    """
+    Writes ONLY:
+      - phase2_metrics_auroc_ci.csv
+      - phase2_metrics_spearman_rho.csv
+    (no filtered CSVs)
+    """
+    final_dir = Path(final_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if not final_dir.exists():
+        raise FileNotFoundError(f"FINAL directory not found: {final_dir}")
+
+    runs = []
+    for manifest_path in sorted(final_dir.glob("*.manifest.json")):
+        results_path = manifest_path.with_suffix("").with_suffix(".results.jsonl")
+        boot_path = manifest_path.with_suffix("").with_suffix(".manifest.bootstrap_indices.npz")
+
+        if not results_path.exists():
+            print("[WARN] Missing results for", manifest_path.name, "expected:", results_path.name)
+            continue
+        if not boot_path.exists():
+            print("[WARN] Missing bootstrap npz for", manifest_path.name, "expected:", boot_path.name)
+            continue
+
+        task, model = infer_task_model_from_manifest(manifest_path)
+        runs.append((task, model, results_path, manifest_path, boot_path))
+
+    if len(runs) == 0:
+        listing = sorted([p.name for p in final_dir.iterdir()])
+        raise RuntimeError(
+            "Found runs: [] but FINAL contains files. Naming mismatch?\n"
+            f"FINAL listing:\n{listing}\n"
+            "Expected per run:\n"
+            "  *.manifest.json\n"
+            "  sameprefix.results.jsonl\n"
+            "  sameprefix.manifest.bootstrap_indices.npz\n"
+        )
+
+    records = []
+    spearman_records = []
+    spearman_ci_rows = []
+
+    SCORE_TO_BOOTKEY = {
+        "lntp": "lntp",
+        "mtp": "mtp",
+        "egh_probe_oof": "egh",
+        "hidden_probe_oof": "hidden",
+    }
+
+    for task, model, results_path, manifest_path, boot_path in runs:
+        rows = load_jsonl(results_path)
+        if not rows:
+            continue
+
+        y_key = find_label_key(rows[0])
+        y = np.array([int(r[y_key]) for r in rows], dtype=int)
+
+        score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
+
+        keys = set(score_dicts[0].keys())
+        for d in score_dicts[1:]:
+            keys &= set(d.keys())
+        keys = sorted(keys)
+
+        S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
+        S = {k: v for k, v in S.items() if k in MAIN_SCORES}
+
+        boot_map = load_bootstrap_map(boot_path)
+        hidden_kept = boot_map.get("hidden_kept_indices", None)
+
+        for score_name, s_raw in S.items():
+            score_l = str(score_name).lower()
+            boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
+            boot_idx = boot_map.get(boot_key, None)
+            if boot_idx is None:
+                boot_idx = boot_map.get("indices", None)
+                
+            if boot_idx is None:
+                print(f"[WARN] No bootstrap indices for score={score_l} in {boot_path.name}; skipping.")
+                continue
+
+            if score_l == "hidden_probe_oof" and hidden_kept is not None:
+                au, direction = auroc_with_best_direction(y[hidden_kept], s_raw[hidden_kept])
+            else:
+                au, direction = auroc_with_best_direction(y, s_raw)
+
+            if np.isnan(au):
+                print(f"[WARN] AUROC undefined (single-class y) for task={task}, model={model}, score={score_l}. Skipping.")
+                continue
+
+            s = s_raw * direction
+
+            if score_l == "hidden_probe_oof":
+                if hidden_kept is None:
+                    m = np.isfinite(s)
+                    y_use = y[m]
+                    s_use = s[m]
+                else:
+                    y_use = y[hidden_kept]
+                    s_use = s[hidden_kept]
+            else:
+                y_use = y
+                s_use = s
+
+            if boot_idx.shape[1] != len(y_use):
+                raise ValueError(
+                    f"Bootstrap shape mismatch for {score_l}: boot_idx {boot_idx.shape} vs N={len(y_use)} "
+                    f"(boot_file={boot_path.name}, boot_key={boot_key})"
+                )
+
+            mean_b, lo, hi = bootstrap_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
+
+            rho = pd.Series(s_use).corr(pd.Series(y_use), method="spearman")
+            spearman_records.append({
+                "task": task,
+                "model": model,
+                "score": score_l,
+                "spearman_rho": float(rho),
+                "direction": float(direction),
+                "N": int(len(y_use)),
+                "pos_rate": float(np.mean(y_use)),
+            })
+
+            m_rho, lo_rho, hi_rho = bootstrap_spearman_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
+            spearman_ci_rows.append({
+                "task": task,
+                "model": model,
+                "score": score_l,
+                "spearman_rho_boot_mean": m_rho,
+                "ci95_lo": lo_rho,
+                "ci95_hi": hi_rho,
+            })
+
+            records.append({
+                "task": task,
+                "model": model,
+                "score": score_l,
+                "direction": float(direction),
+                "N": int(len(y_use)),
+                "pos_rate": float(np.mean(y_use)),
+                "auroc": float(au),
+                "auroc_boot_mean": float(mean_b),
+                "ci95_lo": float(lo),
+                "ci95_hi": float(hi),
+                "manifest_file": str(manifest_path),
+                "results_file": str(results_path),
+                "boot_file": str(boot_path),
+            })
+
+    if len(records) == 0:
+        raise RuntimeError(
+            "No AUROC records produced. All runs may have been skipped "
+            "(missing results/bootstrap files, missing indices, or all scorers filtered out)."
+        )
+        
+    df_au = pd.DataFrame(records).sort_values(["task", "model", "auroc"], ascending=[True, True, False])
+    out_au = out_dir / "phase2_metrics_auroc_ci.csv"
+    df_au.to_csv(out_au, index=False)
+    print("[OK] Wrote:", out_au)
+
+    df_spear_main = pd.DataFrame(spearman_records)
+    df_spear_ci = pd.DataFrame(spearman_ci_rows)
+    df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], how="left")
+
+    out_sp = out_dir / "phase2_metrics_spearman_rho.csv"
+    df_spear_main.to_csv(out_sp, index=False)
+    print("[OK] Wrote:", out_sp)
+
+
+
 # ----------------------------
 # Main
 # ----------------------------
 def main():
     """Generate per-task and appendix combined-task tables for AUROC and Spearman rho."""
+    
+    if not AUROC_CSV.exists() or not SPEAR_CSV.exists():
+        generate_phase2_metric_csvs(final_dir=BASE, out_dir=OUT_DIR)
+    else:
+        print("[OK] Metric CSVs exist -> skipping regeneration.")
     # --- AUROC ---
     if not AUROC_CSV.exists():
         raise FileNotFoundError(f"Missing AUROC CSV: {AUROC_CSV}")
