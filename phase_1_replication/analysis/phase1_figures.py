@@ -60,7 +60,7 @@ from sklearn.metrics import roc_auc_score, roc_curve
 # -----------------------------
 # Global styling (Phase-2-like)
 # -----------------------------
-def apply_phase2_plot_style(font_scale: float = 1.5) -> None:
+def apply_phase2_plot_style(font_scale: float = 1.2) -> None:
     """
     Apply Phase-2 plot style for consistent typography and print/PDF legibility.
 
@@ -75,7 +75,7 @@ def apply_phase2_plot_style(font_scale: float = 1.5) -> None:
             "font.size": int(12 * font_scale),
             "axes.titlesize": int(13 * font_scale),
             "axes.labelsize": int(12 * font_scale),
-            "xtick.labelsize": int(13 * font_scale),
+            "xtick.labelsize": int(11 * font_scale),
             "ytick.labelsize": int(11 * font_scale),
             "legend.fontsize": int(11 * font_scale),
             "legend.title_fontsize": int(11 * font_scale),
@@ -135,6 +135,15 @@ DEFAULT_ORDER: List[str] = [
     "Hidden-state probe (OOF)",
 ]
 
+SCORER_SHORT = {
+    "EGH probe (OOF)": "EGH",
+    "LNTP (hallucination score)": "LNTP",
+    "MTP (hallucination score)": "MTP",
+    "Hidden-state probe (OOF)": "Hidden",
+}
+
+def short_name(name: str) -> str:
+    return SCORER_SHORT.get(name, name)
 
 # -----------------------------
 # I/O helpers
@@ -279,7 +288,7 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
         )
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(ci_df["Scorer"].tolist())
+    ax.set_yticklabels([short_name(s) for s in ci_df["Scorer"].tolist()])
     ax.invert_yaxis()  # highest AUROC on top
 
     # Random baseline
@@ -289,7 +298,7 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.set_xlim(0.4, 0.8)
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
-    finalize_suptitle(fig, "Figure 1 — AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.99, top_rect=0.94)
+    finalize_suptitle(fig, "Figure 1 — AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig1_auroc_bar_comparison.pdf")
     plt.close(fig)
 
@@ -312,7 +321,7 @@ def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.plot(x, ypos, "o")
 
     ax.set_yticks(ypos)
-    ax.set_yticklabels(ci_df_plot["Scorer"].tolist())
+    ax.set_yticklabels([short_name(s) for s in ci_df_plot["Scorer"].tolist()])
     ax.axvline(0.5, color="black", linestyle="--", linewidth=1)
     ax.set_xlim(0.40, 0.80)
     ax.invert_yaxis()
@@ -320,7 +329,7 @@ def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.set_xlabel("AUROC (higher = better hallucination discrimination)")
     ax.set_ylabel("")
 
-    finalize_suptitle(fig, "Figure 2 — AUROC with Bootstrap 95% CI (TruthfulQA, Frozen Answers)", y=0.99, top_rect=0.95)
+    finalize_suptitle(fig, "Figure 2 — AUROC with Bootstrap 95% CI (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig2_auroc_bootstrap_ci.pdf")
     plt.close(fig)
 
@@ -341,14 +350,14 @@ def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
             continue
         fpr, tpr, _ = roc_curve(y[mask], s[mask])
         auc = roc_auc_score(y[mask], s[mask])
-        ax.plot(fpr, tpr, label=f"{name} (AUC={auc:.3f})")
+        ax.plot(fpr, tpr, label=f"{short_name(name)} (AUC={auc:.3f})")
 
     ax.plot([0, 1], [0, 1], "k--", linewidth=1)
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
     ax.legend(loc="lower right", frameon=False)
 
-    finalize_suptitle(fig, "Figure 3 — ROC Curves (Phase 1, TruthfulQA)", y=0.99, top_rect=0.95)
+    finalize_suptitle(fig, "Figure 3 — ROC Curves (Phase 1, TruthfulQA)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig3_roc_overlay.pdf")
     plt.close(fig)
 
@@ -365,10 +374,14 @@ def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
         value_name="Value",
     )
     long_df["Score"] = long_df["ScoreKey"].map(COL_TO_NAME)
+    long_df["Score"] = long_df["Score"].map(short_name)
     long_df["Value"] = pd.to_numeric(long_df["Value"], errors="coerce")
     long_df = long_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Value"])
 
-    order = ordered_subset(DEFAULT_ORDER, long_df["Score"].unique().tolist())
+    # robust order: decide in long names, then map to short names
+    order_long = ordered_subset(DEFAULT_ORDER, list(SCORE_COLS.keys()))
+    order = [short_name(s) for s in order_long]
+
     long_df["Score"] = pd.Categorical(long_df["Score"], categories=order, ordered=True)
 
     long_df["hallucinated_str"] = long_df[LABEL_COL].map({0: "No (0)", 1: "Yes (1)"})
@@ -395,7 +408,7 @@ def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
         label.set_ha("right")
     ax.legend(title="Hallucinated", loc="upper right", frameon=False)
 
-    finalize_suptitle(fig, "Figure 4 — Score Distributions by Hallucination Label", y=0.99, top_rect=0.94)
+    finalize_suptitle(fig, "Figure 4 — Score Distributions by Hallucination Label", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig4_score_distributions.pdf")
     plt.close(fig)
 
@@ -414,8 +427,11 @@ def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
     long_df["Scorer"] = long_df["ScoreKey"].map(inv_map)
     long_df["Value"] = pd.to_numeric(long_df["Value"], errors="coerce")
     long_df = long_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Value"])
+    
+    long_df["Scorer"] = long_df["Scorer"].map(short_name)
 
-    order = ordered_subset(DEFAULT_ORDER, long_df["Scorer"].unique().tolist())
+    order_long = ordered_subset(DEFAULT_ORDER, list(SCORE_COLS.keys()))
+    order = [short_name(s) for s in order_long]
     long_df["Scorer"] = pd.Categorical(long_df["Scorer"], categories=order, ordered=True)
 
     fig, ax = plt.subplots(figsize=(10.0, 4.5))
@@ -426,7 +442,7 @@ def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
     for label in ax.get_xticklabels():
         label.set_ha("right")
 
-    finalize_suptitle(fig, "Figure A — Overall score distributions (all examples)", y=0.99, top_rect=0.94)
+    finalize_suptitle(fig, "Figure A — Overall score distributions (all examples)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figA_overall_score_distributions.pdf")
     plt.close(fig)
 
@@ -456,50 +472,61 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
 
     ax.errorbar(x=x, y=y, xerr=xerr, fmt="o", capsize=4)
     ax.set_yticks(y)
-    ax.set_yticklabels(b_df["Scorer"].tolist())
+    ax.set_yticklabels([short_name(s) for s in b_df["Scorer"].tolist()])
     ax.axvline(0.0, linestyle="--", linewidth=1)  # delta=0 => random
     ax.set_xlabel("ΔAUROC = AUROC − 0.5 (higher = better than random)")
     ax.set_ylabel("")
     ax.invert_yaxis()
 
-    finalize_suptitle(fig, "Figure B — AUROC margin above random (ΔAUROC) with bootstrap 95% CI", y=0.99, top_rect=0.95)
+    finalize_suptitle(fig, "Figure B — AUROC margin above random (ΔAUROC) with bootstrap 95% CI", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figB_delta_auroc_vs_random.pdf")
     plt.close(fig)
 
 
 def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure C — Score overlap by label (density plots).
+    Figure C — Score overlap by label (density plots, 2x2 layout).
     """
-    order = ordered_subset(DEFAULT_ORDER, list(SCORE_COLS.keys()))
-    n = len(order)
+    panel_order = [
+        "LNTP (hallucination score)",
+        "MTP (hallucination score)",
+        "EGH probe (OOF)",
+        "Hidden-state probe (OOF)",
+    ]
+    panel_order = ordered_subset(panel_order, list(SCORE_COLS.keys()))
 
-    fig, axes = plt.subplots(1, n, figsize=(12.0, 3.0), sharey=False)
-    if n == 1:
-        axes = [axes]
+    fig, axes = plt.subplots(2, 2, figsize=(9.0, 7.0), sharey=False)
+    axes = axes.flatten()
 
-    for ax, name in zip(axes, order):
+    for ax, name in zip(axes, panel_order):
         col = SCORE_COLS[name]
         tmp = df[[LABEL_COL, col]].copy()
         tmp[col] = pd.to_numeric(tmp[col], errors="coerce")
         tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna(subset=[col])
 
-        sns.kdeplot(data=tmp[tmp[LABEL_COL] == 0], x=col, label="non-hallucinated (0)", fill=True, alpha=0.35, ax=ax)
-        sns.kdeplot(data=tmp[tmp[LABEL_COL] == 1], x=col, label="hallucinated (1)", fill=True, alpha=0.35, ax=ax)
+        sns.kdeplot(data=tmp[tmp[LABEL_COL] == 0], x=col, label="No (0)",  fill=True, alpha=0.35, ax=ax)
+        sns.kdeplot(data=tmp[tmp[LABEL_COL] == 1], x=col, label="Yes (1)", fill=True, alpha=0.35, ax=ax)
 
-        ax.set_title(name, fontsize=int(mpl.rcParams["axes.titlesize"] * 0.75))
+        ax.set_title(short_name(name))
         ax.set_xlabel("Score")
-        ax.set_ylabel("")
+        ax.set_ylabel("Density")
 
-    # Legend only on first panel
-    axes[0].legend(frameon=False, fontsize=int(mpl.rcParams["legend.fontsize"] * 0.8))
-    for ax in axes[1:]:
+    # Legend nur einmal (oben rechts)
+    axes[1].legend(title="Hallucinated", frameon=False)
+    for ax in (axes[0], axes[2], axes[3]):
         ax.legend([], [], frameon=False)
 
-    finalize_suptitle(fig, "Figure C — Score overlap by label (density plots)", y=1.02, top_rect=0.90)
+    # Suptitle + layout exakt einmal (keine Doppelung)
+    fig.suptitle(
+        "Figure C — Score overlap by label (density plots)",
+        y=0.995,
+        fontsize=int(mpl.rcParams["figure.titlesize"] * 1.2),
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.965])
+
     safe_savefig(fig, outdir / "figC_score_overlap_density.pdf")
     plt.close(fig)
-
+    
 
 def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
     """
@@ -508,8 +535,8 @@ def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
     cols = {
         "LNTP": SCORE_COLS["LNTP (hallucination score)"],
         "MTP": SCORE_COLS["MTP (hallucination score)"],
-        "EGH_probe": SCORE_COLS["EGH probe (OOF)"],
-        "Hidden_probe": SCORE_COLS["Hidden-state probe (OOF)"],
+        "EGH": SCORE_COLS["EGH probe (OOF)"],
+        "Hidden": SCORE_COLS["Hidden-state probe (OOF)"],
     }
 
     mat = pd.DataFrame({k: pd.to_numeric(df[v], errors="coerce") for k, v in cols.items()})
@@ -519,7 +546,7 @@ def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
     fig, ax = plt.subplots(figsize=(6.0, 5.0))
     sns.heatmap(corr, annot=True, fmt=".2f", vmin=-1, vmax=1, square=True, cmap="coolwarm", ax=ax)
 
-    finalize_suptitle(fig, "Figure D — Spearman rank correlation between scorers", y=0.99, top_rect=0.93)
+    finalize_suptitle(fig, "Figure D — Spearman rank correlation between scorers", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figD_spearman_correlation_heatmap.pdf")
     plt.close(fig)
 
@@ -554,11 +581,11 @@ def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
         bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8),
     )
 
-    ax.set_xlabel("LNTP hallucination score (lower = lower hallucination-likelihood)")
-    ax.set_ylabel("Hidden-state probe score (OOF)")
-    ax.legend(title="hallucinated", labels=["non-hallucinated (0)", "hallucinated (1)"], frameon=False)
+    ax.set_xlabel("LNTP score")
+    ax.set_ylabel("Hidden score")
+    ax.legend(title="Hallucinated", labels=["No (0)", "Yes (1)"], frameon=False)
 
-    finalize_suptitle(fig, "Figure E — LNTP-low mismatches (low LNTP score vs Hidden-state probe)", y=0.99, top_rect=0.95)
+    finalize_suptitle(fig, "Figure E — LNTP-low mismatches (low LNTP score vs Hidden-state probe)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figE_lntp_low_mismatches_vs_hidden.pdf")
     plt.close(fig)
 
@@ -674,7 +701,7 @@ def parse_args() -> Args:
     p.add_argument("--results", type=str, default=str(default_results))
     p.add_argument("--manifest", type=str, default=str(default_manifest))
     p.add_argument("--outdir", type=str, default=str(default_outdir))
-    p.add_argument("--font_scale", type=float, default=1.5)
+    p.add_argument("--font_scale", type=float, default=1.3)
     p.add_argument("--extras", action="store_true")
 
     a = p.parse_args()
@@ -691,11 +718,11 @@ def parse_args() -> Args:
 def main() -> None:
     args = parse_args()
 
-    # Apply Phase-2-like styling globally
-    apply_phase2_plot_style(font_scale=args.font_scale)
-
     # Make seaborn respect matplotlib rcParams without imposing its own theme.
     sns.set_theme(style="white", rc={})
+
+    # Apply Phase-2-like styling globally
+    apply_phase2_plot_style(font_scale=args.font_scale)
 
     ensure_dir(args.outdir)
 
