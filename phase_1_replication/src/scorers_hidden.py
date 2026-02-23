@@ -1,3 +1,16 @@
+"""
+Hidden-state feature extraction and supervised scoring utilities.
+
+Builds per-example feature vectors by pooling transformer hidden states over either
+answer tokens or all real (non-padding) tokens. Primary inputs are QA-like examples
+(question, model_answer) and an LLM wrapper that can encode QA pairs and return
+hidden states. Outputs include (X, kept_idx, meta) for auditing, plus OOF logistic
+regression probabilities for downstream evaluation.
+
+Determinism: feature extraction is deterministic given fixed model weights and
+tokenization; OOF training is deterministic given the fixed StratifiedKFold seed.
+"""
+
 # src/scorers_hidden.py
 from __future__ import annotations
 
@@ -18,10 +31,7 @@ from sklearn.preprocessing import StandardScaler
 # =============================================================================
 
 class QAProto(Protocol):
-    """
-    Minimal interface expected by the hidden-state feature extractor.
-    Intentionally dataset-agnostic.
-    """
+    """Dataset-agnostic QA record interface (question + frozen model_answer)."""
     question: str
     model_answer: str
 
@@ -33,24 +43,11 @@ class QAProto(Protocol):
 @dataclass(frozen=True)
 class HiddenFeatureConfig:
     """
-    Feature extraction config for hidden-state methods.
+    Configuration for converting hidden states into fixed-size feature vectors.
 
-    layers:
-        Transformer layer indices to use (hidden_states indexing).
-        Negative indices follow Python semantics (hidden_states[-1] = last).
-
-    pooling:
-        How to pool token-level hidden states into a fixed vector.
-        - "mean_answer": mean over answer tokens only
-        - "last_answer": last answer token vector
-        - "mean_all":    mean over all *real* tokens (mask-aware)
-
-    normalize:
-        If True, L2-normalize the pooled vector(s) per sample.
-
-    batch_size:
-        Batch size for feature extraction forward passes (output_hidden_states=True).
-        With 48GB VRAM you can often run 16–64 depending on model + seq length.
+    layers selects which hidden_state tensors to use (HF convention: embeddings + layers),
+    pooling defines token-to-vector reduction, and normalize optionally L2-normalizes the
+    concatenated feature per sample. batch_size controls forward-pass batching.
     """
     layers: Tuple[int, ...] = (-1,)
     pooling: str = "mean_answer"
@@ -61,11 +58,10 @@ class HiddenFeatureConfig:
 @dataclass(frozen=True)
 class HiddenScorerConfig:
     """
-    Paper-ready supervised scorer configuration for hidden-state features.
+    Supervised OOF scorer configuration for hidden-state features.
 
-    - OOF probabilities via Stratified K-Fold
-    - StandardScaler inside Pipeline to avoid leakage
-    - fixed seed for reproducibility
+    Uses StratifiedKFold with shuffling for OOF probabilities and a scaler+logreg Pipeline
+    to prevent preprocessing leakage. random_state fixes fold assignment deterministically.
     """
     n_splits: int = 5
     random_state: int = 42
@@ -80,6 +76,7 @@ class HiddenScorerConfig:
 # =============================================================================
 
 def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    # Per-sample normalization; keep degenerate all-zero vectors unchanged.
     n = float(np.linalg.norm(x))
     if n < eps:
         return x
@@ -88,8 +85,7 @@ def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 def _validate_layers(layer_indices: Tuple[int, ...], n_hidden_states: int) -> None:
     """
-    Validate that each layer index is valid for hidden_states length.
-    hidden_states includes embeddings + each transformer layer; HF usually returns len = n_layers + 1.
+    Validate layer indices against hidden_states length (HF typically: n_layers + 1).
     """
     for li in layer_indices:
         if not (-n_hidden_states <= li < n_hidden_states):
@@ -101,8 +97,8 @@ def _validate_layers(layer_indices: Tuple[int, ...], n_hidden_states: int) -> No
 
 def _last_real_token_end(attn_row: torch.Tensor) -> int:
     """
-    Compute end index (exclusive) of real tokens in PADDED space using attention_mask row.
-    Returns 0 if no real tokens.
+    End index (exclusive) of real (non-padding) tokens derived from attention_mask.
+    Returns 0 when the row contains no real tokens (all padding).
     """
     idx = torch.nonzero(attn_row, as_tuple=False).flatten()
     if idx.numel() == 0:
@@ -117,20 +113,21 @@ def _pool_hidden_masked(
     pooling: str,
 ) -> torch.Tensor:
     """
-    Pool a single-sample hidden-state row into a single vector.
+    Pool a single sequence of hidden states into one vector (token-mask aware).
 
-    Paper-ready behavior (Must-Fix 2):
-    - If ans_start >= end_real (invalid/empty answer span), DO NOT fallback.
-      Raise instead, so invalid spans cannot silently produce "mean_all" / "last token" features.
+    Answer-aware poolings are STRICT: invalid/empty answer spans raise ValueError so
+    upstream can skip the sample rather than silently mixing pooling conventions.
     """
     T, D = h_row.shape
     end_real = _last_real_token_end(attn_row)  # exclusive
     if end_real <= 0:
+        # All-padding sequence: produce a deterministic zero feature.
         return torch.zeros((D,), device=h_row.device, dtype=h_row.dtype)
 
     real_mask = attn_row.bool()
 
     if pooling == "mean_all":
+        # Pool only real tokens; never include padding vectors in the mean.
         h_real = h_row[real_mask, :]
         if h_real.numel() == 0:
             return torch.zeros((D,), device=h_row.device, dtype=h_row.dtype)
@@ -143,6 +140,7 @@ def _pool_hidden_masked(
             "Do not fallback to mean_all/last token; skip this sample upstream."
         )
 
+    # Convention: answer span is [ans_start, end_real), i.e., from first answer token to last real token.
     ans_span = h_row[ans_start:end_real, :]
     if ans_span.size(0) == 0:
         raise ValueError(
@@ -154,6 +152,7 @@ def _pool_hidden_masked(
         return ans_span.mean(dim=0)
 
     if pooling == "last_answer":
+        # Last real token within the answer span (often corresponds to final answer token).
         return ans_span[-1, :]
 
     raise ValueError(f"Unknown pooling strategy: {pooling}")
@@ -171,12 +170,10 @@ def build_hidden_feature_matrix(
     strict: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
-    Build hidden-state feature matrix from frozen model answers.
+    Extract pooled hidden-state features for QA pairs, returning (X, kept_idx, meta).
 
-    Robust behavior:
-    - skips empty answers
-    - skips examples where answer_start_idx is invalid (>= end_real)
-    - reports meta/audit stats
+    Skips empty answers and invalid answer spans; meta reports counts and dropped indices
+    for auditability. If strict=False, model/encoding failures drop whole batches.
     """
     pooling = feature_cfg.pooling
     layers = tuple(feature_cfg.layers)
@@ -197,6 +194,7 @@ def build_hidden_feature_matrix(
     valid_pairs: List[Tuple[int, str, str]] = []
     for i, ex in enumerate(examples):
         ans = getattr(ex, "model_answer", None)
+        # Empty answers cannot produce answer-aware features; drop explicitly for reproducible accounting.
         if not ans or not isinstance(ans, str) or not ans.strip():
             skipped_empty += 1
             dropped_empty_idx.append(i)
@@ -216,6 +214,7 @@ def build_hidden_feature_matrix(
             ans = [b[2] for b in batch]
 
             try:
+                # Assumes llm encodes QA such that answer_start_idx aligns to tokenized input_ids.
                 enc_b = llm.encode_qa_batch(qs, ans)
                 out = llm.forward(
                     input_ids=enc_b.input_ids,
@@ -236,6 +235,7 @@ def build_hidden_feature_matrix(
                     attn_row = enc_b.attention_mask[bi]
                     end_real = _last_real_token_end(attn_row)
 
+                    # Invariant: answer-aware pooling requires ans_start < end_real and at least one real token.
                     if ans_start >= end_real or end_real == 0:
                         skipped_span += 1
                         dropped_span_idx.append(idxs[bi])
@@ -243,6 +243,7 @@ def build_hidden_feature_matrix(
 
                     pooled_parts: List[torch.Tensor] = []
                     for layer_idx in layers:
+                        # Concatenate pooled vectors across selected layers (feature_dim scales with len(layers)).
                         h_layer = hs[layer_idx][bi]
                         pooled = _pool_hidden_masked(
                             h_row=h_layer,
@@ -265,6 +266,7 @@ def build_hidden_feature_matrix(
                     kept.append(idxs[bi])
 
             except Exception:
+                # NOTE: potential issue: strict=False drops entire batches, not individual failed samples.
                 if strict:
                     raise
                 skipped_other += len(batch)
@@ -273,6 +275,7 @@ def build_hidden_feature_matrix(
     if not feats:
         raise ValueError("No hidden features extracted (all valid answers had invalid spans or failures).")
 
+    # Features are stacked in the same order as kept_idx for downstream alignment with labels.
     X = np.stack(feats, axis=0).astype(np.float64, copy=False)
     kept_idx = np.asarray(kept, dtype=int)
 
@@ -303,6 +306,7 @@ def build_hidden_feature_matrix(
 # =============================================================================
 
 def _compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
+    # Defensive AUROC: enforce 1D alignment and ensure both classes are present.
     y = np.asarray(y).reshape(-1).astype(int)
     s = np.asarray(s).reshape(-1).astype(float)
     if y.shape[0] != s.shape[0]:
@@ -313,6 +317,7 @@ def _compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
 
 
 def _make_model(cfg: HiddenScorerConfig) -> Pipeline:
+    # Standardize within each fold (Pipeline prevents leakage from test fold into scaling stats).
     return Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -336,9 +341,7 @@ def train_hidden_scorer_oof(
     *,
     return_final_model: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Train a scorer with Out-of-Fold (OOF) probabilities.
-    """
+    """Fit OOF logistic-regression scorer and return OOF scores + fold audit metadata."""
     X = np.asarray(X, dtype=np.float64)
     y = np.asarray(y).reshape(-1).astype(int)
 
@@ -354,7 +357,7 @@ def train_hidden_scorer_oof(
     skf = StratifiedKFold(
         n_splits=cfg.n_splits,
         shuffle=True,
-        random_state=cfg.random_state,
+        random_state=cfg.random_state,  # fixed fold assignment for reproducibility
     )
 
     oof_scores = np.full(shape=(X.shape[0],), fill_value=np.nan, dtype=np.float64)
@@ -364,9 +367,11 @@ def train_hidden_scorer_oof(
         model = _make_model(cfg)
         model.fit(X[tr], y[tr])
 
+        # Convention: score is P(y=1) from predict_proba[:, 1] (class ordering per sklearn).
         probs = model.predict_proba(X[te])[:, 1]
         oof_scores[te] = probs
 
+        # Store full indices for exact fold reconstruction and manifest-level auditing.
         fold_indices.append(
             {
                 "fold": int(fold_id),
@@ -391,6 +396,7 @@ def train_hidden_scorer_oof(
     }
 
     if return_final_model:
+        # Final refit on all data for deployment; not used for OOF evaluation.
         final_model = _make_model(cfg)
         final_model.fit(X, y)
         out["final_model"] = final_model
@@ -414,12 +420,9 @@ def oof_logreg_scores(
     class_weight: Optional[str] = None,
 ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Minimal wrapper to provide the exact (scores, folds) API previously implemented in run_phase1_truthfulqa.py,
-    but now centralized here (Single Source of Truth).
+    Compatibility wrapper returning (scores, folds) with count-only fold summaries.
 
-    Returns:
-      scores: (n,) OOF probabilities for class 1
-      folds:  list of per-fold summaries (counts only; no indices) for manifest logging
+    scores are OOF P(y=1) probabilities; folds omits indices for lightweight logging.
     """
     cfg = HiddenScorerConfig(
         n_splits=int(n_splits),

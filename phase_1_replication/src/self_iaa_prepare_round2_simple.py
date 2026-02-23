@@ -1,7 +1,14 @@
+"""Prepare Self-IAA Round-2 (blind) labeling artifacts from a frozen Phase-1 dataset.
+Reads a JSONL of model outputs with Phase-1 labels and draws a deterministic, stratified sample.
+Inputs: Phase-1 JSONL at INPUT_PATH with at least {"qid", "model_answer", "hallucinated"}.
+Outputs: (1) frozen qid list JSON (OUT_QIDS_PATH) and (2) blind labeling template JSONL (OUT_TEMPLATE_PATH).
+Sampling is 50/50 by Phase-1 "hallucinated" label; template order is independently shuffled.
+Deterministic/reproducible given SEED, N_TOTAL, and an unchanged input file content/order.
+"""
+
 # src/self_iaa_prepare_round2_simple.py
 #
-# Prepare Self-IAA Round-2 (blind) from frozen Phase-1 dataset.
-# MINIMAL version: only produces "hallucinated": null for manual labeling.
+# NOTE: potential issue: reproducibility depends on stable input ordering within INPUT_PATH (sampling indexes rows).
 
 from __future__ import annotations
 import json
@@ -28,29 +35,34 @@ N_TOTAL = 80
 # ---------------------------------------------------------------------
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """Read non-empty JSONL lines into a list of dict rows."""
     rows = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
-            if line.strip():
+            if line.strip():  # ignore blank/whitespace-only lines to avoid JSON decode errors
                 rows.append(json.loads(line))
     return rows
 
 
 def stratified_sample(rows: List[Dict[str, Any]], n_total: int, seed: int) -> List[Dict[str, Any]]:
+    """Deterministic 50/50 stratified sample by integer-cast r["hallucinated"] in {0,1}."""
     rng = np.random.default_rng(seed)
 
+    # Convention: Phase-1 "hallucinated" is treated as a binary label; any non-{0,1} value will raise via int().
     y = np.array([int(r["hallucinated"]) for r in rows], dtype=int)
     idx0 = np.where(y == 0)[0]
     idx1 = np.where(y == 1)[0]
 
+    # Split rule: floor(n/2) negatives, remainder positives (keeps exact n_total even when odd).
     n0_draw = n_total // 2
     n1_draw = n_total - n0_draw
 
+    # NOTE: potential issue: will error if a class has fewer than the requested draw without replacement.
     s0 = rng.choice(idx0, size=n0_draw, replace=False)
     s1 = rng.choice(idx1, size=n1_draw, replace=False)
 
     idx = np.concatenate([s0, s1])
-    rng.shuffle(idx)
+    rng.shuffle(idx)  # randomize within-sample order while preserving deterministic membership
 
     print(f"[Self-IAA Sampling] N={n_total} | hallu=0: {n0_draw} | hallu=1: {n1_draw}")
     return [rows[i] for i in idx.tolist()]
@@ -60,8 +72,10 @@ def stratified_sample(rows: List[Dict[str, Any]], n_total: int, seed: int) -> Li
 # ---------------------------------------------------------------------
 
 def main() -> None:
+    """Run Phase-1 summary, stratified sampling, and emit frozen qids + blind labeling template."""
     rows = read_jsonl(INPUT_PATH)
 
+    # Quick sanity summary: counts are computed from the same int-cast used for sampling.
     y = np.array([int(r["hallucinated"]) for r in rows], dtype=int)
     print(
         f"[Phase-1 Labels] N={len(rows)} | "
@@ -70,14 +84,14 @@ def main() -> None:
 
     sampled = stratified_sample(rows, N_TOTAL, SEED)
 
-    # Freeze qids
+    # Freeze qids: canonical record of membership for Round-2, independent of any later shuffling.
     qids = [r["qid"] for r in sampled]
     OUT_QIDS_PATH.write_text(
         json.dumps(
             {
                 "seed": SEED,
                 "n_total": N_TOTAL,
-                "sampling": "stratified_50_50",
+                "sampling": "stratified_50_50",  # convention label for downstream bookkeeping
                 "qids": qids,
             },
             indent=2,
@@ -87,7 +101,7 @@ def main() -> None:
     )
     print(f"[OK] Wrote frozen qids: {OUT_QIDS_PATH}")
 
-    # Blind template (MINIMAL)
+    # Blind template: use a distinct RNG stream (SEED+999) so membership and presentation order are decoupled.
     rng = np.random.default_rng(SEED + 999)
     rng.shuffle(sampled)
 
@@ -95,10 +109,10 @@ def main() -> None:
         for r in sampled:
             out = {
                 "qid": r["qid"],
-                "question": r.get("question", ""),
+                "question": r.get("question", ""),  # tolerate missing keys; blanks preserve JSONL schema
                 "reference_answer": r.get("reference_answer", ""),
-                "model_answer": r["model_answer"],
-                "hallucinated": None,  # <-- ONLY FIELD YOU FILL
+                "model_answer": r["model_answer"],  # required field for labeling; missing key should fail loudly
+                "hallucinated": None,  # <-- ONLY FIELD YOU FILL (blind labels: 0/1)
             }
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
 

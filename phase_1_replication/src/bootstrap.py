@@ -1,3 +1,11 @@
+"""Bootstrap utilities for AUROC and paired AUROC differences with percentile CIs.
+
+Inputs: binary labels `y` (0/1) and prediction scores (`score`, or `score_a`/`score_b`).
+Outputs: point estimates plus percentile confidence intervals and (optionally) stored resample indices.
+Implements stratified resampling (within-class) by default to keep class counts fixed per replicate.
+Determinism: all sampling is driven by `BootstrapConfig.seed` via NumPy's Generator for reproducibility.
+"""
+
 # src/bootstrap.py
 from __future__ import annotations
 
@@ -10,43 +18,23 @@ from sklearn.metrics import roc_auc_score
 
 @dataclass(frozen=True)
 class BootstrapConfig:
-    """
-    Bootstrap configuration.
-
-    B:
-      Number of bootstrap replicates.
-
-    ci:
-      Confidence level for percentile CI (e.g., 0.95).
-
-    seed:
-      RNG seed.
-
-    stratified:
-      If True: resample WITHIN each class to preserve class counts (recommended for AUROC).
-      If False: plain bootstrap over all indices (can produce single-class samples; will be skipped).
-    """
+    """Configuration for bootstrap resampling and percentile CI construction."""
     B: int = 5000
     ci: float = 0.95
     seed: int = 42
-    stratified: bool = True
+    stratified: bool = True  # NOTE: potential issue: stratification assumes meaningful 0/1 labels only.
 
 
 @dataclass(frozen=True)
 class BootstrapResult:
-    """
-    Result of bootstrap AUROC with percentile CI.
-
-    auc_samples and (optionally) indices are aligned: auc_samples[i] was computed on indices[i].
-    If stratified=False, invalid (single-class) replicates are dropped; see n_valid.
-    """
+    """AUROC point estimate with percentile CI and per-replicate AUROC samples (optionally indices)."""
     auc: float
     ci_low: float
     ci_high: float
     auc_samples: np.ndarray  # shape (n_valid,)
-    indices: Optional[np.ndarray] = None  # shape (n_valid, N)
-    n_valid: int = 0
-    n_total: int = 0
+    indices: Optional[np.ndarray] = None  # shape (n_valid, N); indices[i] -> auc_samples[i] if stored
+    n_valid: int = 0  # valid replicates retained (may be < n_total when stratified=False)
+    n_total: int = 0  # requested replicates (cfg.B)
     ci: float = 0.95
     stratified: bool = True
     seed: int = 42
@@ -58,19 +46,14 @@ class BootstrapResult:
 
 @dataclass(frozen=True)
 class BootstrapDiffResult:
-    """
-    Result of paired bootstrap for AUROC difference: AUC(A) - AUC(B).
-
-    diff_samples and (optionally) indices are aligned: diff_samples[i] was computed on indices[i].
-    If stratified=False, invalid (single-class) replicates are dropped; see n_valid.
-    """
+    """Paired-bootstrap AUROC difference (AUC(A)-AUC(B)) with percentile CI and samples (optionally indices)."""
     diff: float
     ci_low: float
     ci_high: float
     diff_samples: np.ndarray  # shape (n_valid,)
-    indices: Optional[np.ndarray] = None  # shape (n_valid, N)
-    n_valid: int = 0
-    n_total: int = 0
+    indices: Optional[np.ndarray] = None  # shape (n_valid, N); indices[i] -> diff_samples[i] if stored
+    n_valid: int = 0  # valid replicates retained (may be < n_total when stratified=False)
+    n_total: int = 0  # requested replicates (cfg.B)
     ci: float = 0.95
     stratified: bool = True
     seed: int = 42
@@ -81,6 +64,7 @@ def _validate_bootstrap_inputs(
     score: np.ndarray,
     cfg: BootstrapConfig,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    # Normalize to 1D numeric arrays; AUROC expects matching lengths and finite scores.
     y = np.asarray(y).astype(int).reshape(-1)
     score = np.asarray(score).astype(float).reshape(-1)
 
@@ -93,32 +77,33 @@ def _validate_bootstrap_inputs(
     if not (0.0 < float(cfg.ci) < 1.0):
         raise ValueError(f"ci must be in (0,1), got {cfg.ci}")
     if np.unique(y).size < 2:
+        # AUROC is undefined if the dataset has only one class (including after preprocessing).
         raise ValueError("AUROC undefined: y has only one class.")
     if not np.all(np.isfinite(score)):
+        # Avoid silent propagation of NaN/Inf through sklearn metric and quantiles.
         raise ValueError("score contains non-finite values (NaN/Inf).")
 
     return y, score
 
 
 def _stratified_bootstrap_indices(y: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """
-    Stratified resampling indices: sample with replacement within each class,
-    keeping class counts equal to the original, then shuffle.
-    """
+    """Return resampling indices by bootstrapping within each class, preserving original class counts."""
     idx0 = np.where(y == 0)[0]
     idx1 = np.where(y == 1)[0]
     n0 = idx0.shape[0]
     n1 = idx1.shape[0]
 
+    # Stratified resampling: guarantees both classes present given original has both classes.
     s0 = rng.choice(idx0, size=n0, replace=True)
     s1 = rng.choice(idx1, size=n1, replace=True)
 
     idx = np.concatenate([s0, s1])
-    rng.shuffle(idx)
+    rng.shuffle(idx)  # Mix classes to avoid any implicit ordering assumptions downstream.
     return idx
 
 
 def _plain_bootstrap_indices(n: int, rng: np.random.Generator) -> np.ndarray:
+    # Plain bootstrap over all observations; may yield single-class samples when classes are imbalanced.
     return rng.integers(0, n, size=n, endpoint=False)
 
 
@@ -129,19 +114,14 @@ def bootstrap_auc(
     *,
     store_indices: bool = False,
 ) -> BootstrapResult:
-    """
-    Bootstrap AUROC with percentile confidence interval.
-
-    - If cfg.stratified=True, each bootstrap sample preserves class counts and AUROC is always defined.
-    - If cfg.stratified=False, some samples may contain only one class; those replicates are skipped.
-
-    Returns BootstrapResult with auc_samples aligned to indices (if stored).
-    """
+    """Compute bootstrap AUROC samples and a percentile CI (optionally storing resample indices)."""
     y, score = _validate_bootstrap_inputs(y, score, cfg)
     n = y.shape[0]
 
+    # Point estimate computed on the full sample (not a bootstrap replicate).
     point_auc = float(roc_auc_score(y, score))
 
+    # Deterministic sampling given cfg.seed; no global RNG state is used.
     rng = np.random.default_rng(int(cfg.seed))
 
     auc_list: list[float] = []
@@ -150,7 +130,7 @@ def bootstrap_auc(
     for _ in range(int(cfg.B)):
         if cfg.stratified:
             idx = _stratified_bootstrap_indices(y, rng)
-            # Defined by construction
+            # Defined by construction: each replicate contains both classes if original does.
             auc_val = float(roc_auc_score(y[idx], score[idx]))
             auc_list.append(auc_val)
             if store_indices:
@@ -159,6 +139,7 @@ def bootstrap_auc(
             idx = _plain_bootstrap_indices(n, rng)
             y_b = y[idx]
             if np.unique(y_b).size < 2:
+                # Skip invalid replicates to avoid undefined AUROC; reduces effective sample size (n_valid).
                 continue
             auc_val = float(roc_auc_score(y_b, score[idx]))
             auc_list.append(auc_val)
@@ -166,18 +147,21 @@ def bootstrap_auc(
                 idx_list.append(idx.astype(np.int32, copy=False))
 
     if len(auc_list) == 0:
+        # All replicates invalid implies CI cannot be estimated; typically class imbalance + stratified=False.
         raise RuntimeError(
             "Bootstrap produced 0 valid replicates (likely due to extreme class imbalance with stratified=False)."
         )
 
     auc_samples = np.asarray(auc_list, dtype=np.float64)
 
+    # Percentile CI on the bootstrap distribution; alpha determined by cfg.ci.
     alpha = (1.0 - float(cfg.ci)) / 2.0
     low = float(np.quantile(auc_samples, alpha))
     high = float(np.quantile(auc_samples, 1.0 - alpha))
 
     indices = None
     if store_indices:
+        # Invariant: len(idx_list) == len(auc_list) because indices are stored only for valid replicates.
         indices = np.stack(idx_list, axis=0).astype(np.int32, copy=False)
 
     return BootstrapResult(
@@ -201,13 +185,12 @@ def bootstrap_auc_diff(
     cfg: BootstrapConfig,
 ) -> Tuple[float, float, float]:
     """
-    Bootstrap CI for AUROC difference: AUC(A) - AUC(B).
+    Paired bootstrap percentile CI for AUROC difference, using shared indices per replicate.
 
-    Important: uses SHARED bootstrap indices ("paired bootstrap") so that the
-    correlation between the two AUC estimates is preserved.
-
-    CI method: percentile bootstrap CI over the bootstrap distribution of differences.
+    Uses the same bootstrap indices for A and B to preserve within-sample correlation of AUROC estimates.
+    Returns (point_diff, ci_low, ci_high) where point_diff = AUC(score_a) - AUC(score_b).
     """
+    # Normalize to 1D numeric arrays; keep explicit validation here to avoid cross-function coupling.
     y = np.asarray(y).astype(int).reshape(-1)
     score_a = np.asarray(score_a).astype(float).reshape(-1)
     score_b = np.asarray(score_b).astype(float).reshape(-1)
@@ -226,6 +209,7 @@ def bootstrap_auc_diff(
         raise ValueError("Scores contain non-finite values (NaN/Inf).")
 
     n = y.shape[0]
+    # Sign convention: positive values indicate score_a yields higher AUROC than score_b.
     diff_point = float(roc_auc_score(y, score_a) - roc_auc_score(y, score_b))
 
     rng = np.random.default_rng(int(cfg.seed))
@@ -234,12 +218,14 @@ def bootstrap_auc_diff(
     for _ in range(int(cfg.B)):
         if cfg.stratified:
             idx = _stratified_bootstrap_indices(y, rng)
+            # Paired bootstrap: same idx applied to both score vectors.
             d = float(roc_auc_score(y[idx], score_a[idx]) - roc_auc_score(y[idx], score_b[idx]))
             diffs.append(d)
         else:
             idx = _plain_bootstrap_indices(n, rng)
             y_b = y[idx]
             if np.unique(y_b).size < 2:
+                # Skip invalid replicates; effective n_valid can be much smaller than cfg.B.
                 continue
             d = float(roc_auc_score(y_b, score_a[idx]) - roc_auc_score(y_b, score_b[idx]))
             diffs.append(d)
@@ -270,15 +256,7 @@ def bootstrap_auc_diff_with_indices(
     *,
     store_indices: bool = False,
 ) -> BootstrapDiffResult:
-    """
-    Paired bootstrap for AUROC difference: AUC(A) - AUC(B), with OPTIONAL index storage.
-
-    - Uses SHARED bootstrap indices per replicate (paired bootstrap).
-    - If cfg.stratified=True, each replicate preserves class counts and AUROC is always defined.
-    - If cfg.stratified=False, replicates that contain only one class are skipped.
-
-    Returns BootstrapDiffResult with diff_samples aligned to indices (if stored).
-    """
+    """Paired-bootstrap AUROC difference with percentile CI and optional resample index storage."""
     y = np.asarray(y).astype(int).reshape(-1)
     score_a = np.asarray(score_a).astype(float).reshape(-1)
     score_b = np.asarray(score_b).astype(float).reshape(-1)
@@ -307,6 +285,7 @@ def bootstrap_auc_diff_with_indices(
     for _ in range(int(cfg.B)):
         if cfg.stratified:
             idx = _stratified_bootstrap_indices(y, rng)
+            # Paired bootstrap: shared idx preserves correlation between AUROC estimates.
             d = float(roc_auc_score(y[idx], score_a[idx]) - roc_auc_score(y[idx], score_b[idx]))
             diffs.append(d)
             if store_indices:
@@ -334,6 +313,7 @@ def bootstrap_auc_diff_with_indices(
 
     indices = None
     if store_indices:
+        # Invariant: len(idx_list) == len(diffs) because indices are stored only for valid replicates.
         indices = np.stack(idx_list, axis=0).astype(np.int32, copy=False)
 
     return BootstrapDiffResult(

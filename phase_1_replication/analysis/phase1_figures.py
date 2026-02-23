@@ -1,39 +1,14 @@
 # phase1_figures.py
 # -*- coding: utf-8 -*-
 """
-Phase 1 Figures — TruthfulQA (Frozen Answers)
+Phase 1 figure generator for TruthfulQA (frozen-answer setting).
 
-This script loads Phase 1 per-example results (JSONL) and the corresponding run manifest (JSON),
-and produces all publication-ready figures for the thesis/paper.
-
-Design goals:
-- Reproducible, CLI-driven figure generation (no notebook state).
-- Consistent plot styling aligned with Phase 2 (rcParams + FONT_SCALE).
-- Minimal manual tweaks per figure; systematic finishing (suptitle + tight_layout rect).
-- Clear scientific structure: data loading → tables → figures → export.
-
-Figures produced:
-- Figure 1: AUROC comparison (barh with bootstrap CI, value labels, random line at 0.5)
-- Figure 2: AUROC with bootstrap 95% CI (interval plot)
-- Figure 3: ROC overlay
-- Figure 4: Score distributions by hallucination label (boxplots)
-- Figure A: Overall score distributions (all examples, label-agnostic)
-- Figure B: ΔAUROC above random (AUROC - 0.5) with bootstrap CI
-- Figure C: Score overlap by label (density/KDE)
-- Figure D: Spearman rank correlation heatmap
-- Figure E: LNTP-low mismatches scatter (LNTP vs hidden-probe)
-
-Optional (NOT part of paper pipeline by default):
-- Extra exploratory analyses: simulated OOF probe variants, ensemble probe weights.
-
-Usage:
-    python phase1_figures.py \
-        --results ../outputs/phase1_truthfulqa_hallu_results_300.jsonl \
-        --manifest ../outputs/phase1_run_manifest.json \
-        --outdir  ../outputs/figs \
-        --font_scale 1.5
-
-Author: <your name>
+Loads per-example results from a JSONL file plus an authoritative run manifest (JSON),
+then renders publication-ready PDF figures (AUROC/CIs, ROC, score distributions, overlap,
+rank correlations, and targeted mismatch diagnostics).
+Key inputs: --results (per-example JSONL), --manifest (run manifest with AUROC/bootstrap CI).
+Key outputs: PDF figures written to --outdir (one file per figure).
+Determinism: fully deterministic given fixed input files; AUROC/CIs are read from the manifest.
 """
 
 from __future__ import annotations
@@ -50,8 +25,8 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-# Seaborn is used for KDE/box/heatmap/scatter convenience.
-# If you prefer pure Matplotlib, we can refactor these few plots later.
+# Seaborn is used for high-level statistical plots (KDE/box/heatmap/scatter) while still
+# deferring typography/layout to Matplotlib rcParams for consistent publication styling.
 import seaborn as sns
 
 from sklearn.metrics import roc_auc_score, roc_curve
@@ -61,13 +36,7 @@ from sklearn.metrics import roc_auc_score, roc_curve
 # Global styling (Phase-2-like)
 # -----------------------------
 def apply_phase2_plot_style(font_scale: float = 1.2) -> None:
-    """
-    Apply Phase-2 plot style for consistent typography and print/PDF legibility.
-
-    Notes:
-    - We keep this centralized so Phase 1 and Phase 2 visuals remain consistent.
-    - Uses serif fonts and vector-friendly PDF font embedding (no Type-3 fonts).
-    """
+    """Set shared rcParams for Phase 1/2 visual consistency and PDF-safe font embedding."""
     mpl.rcParams.update(
         {
             "font.family": "serif",
@@ -105,12 +74,13 @@ def apply_phase2_plot_style(font_scale: float = 1.2) -> None:
 # -----------------------------
 # Constants / naming
 # -----------------------------
+# Binary label convention used throughout: 1 => hallucinated, 0 => not hallucinated.
 LABEL_COL: str = "hallucinated"
 
-# Standard bar width used across the project (your Phase-2 preference)
+# Standard bar width used across the project for consistent visual density.
 BAR_WIDTH: float = 0.65
 
-# Display-name -> column in results DF
+# Display-name -> column in results DF (flattened JSON keys).
 SCORE_COLS: Dict[str, str] = {
     "Hidden-state probe (OOF)": "scores.hidden_probe_oof",
     "LNTP (hallucination score)": "scores.lntp_uncertainty",
@@ -119,7 +89,7 @@ SCORE_COLS: Dict[str, str] = {
 }
 COL_TO_NAME: Dict[str, str] = {v: k for k, v in SCORE_COLS.items()}
 
-# Manifest keys for AUROC + bootstrap blocks
+# Manifest keys for AUROC + bootstrap blocks (authoritative reporting source).
 MANIFEST_KEYS: Dict[str, str] = {
     "Hidden-state probe (OOF)": "hidden_probe_oof",
     "LNTP (hallucination score)": "lntp_uncertainty",
@@ -127,7 +97,7 @@ MANIFEST_KEYS: Dict[str, str] = {
     "EGH probe (OOF)": "egh_probe_oof",
 }
 
-# Preferred display order (only keep those present)
+# Preferred display order (only keep those present).
 DEFAULT_ORDER: List[str] = [
     "LNTP (hallucination score)",
     "MTP (hallucination score)",
@@ -143,28 +113,26 @@ SCORER_SHORT = {
 }
 
 def short_name(name: str) -> str:
+    """Stable short label for plotting; falls back to full name if unknown."""
     return SCORER_SHORT.get(name, name)
 
 # -----------------------------
 # I/O helpers
 # -----------------------------
 def ensure_dir(path: Path) -> None:
+    """Create directory (and parents) if missing; no-op if already present."""
     path.mkdir(parents=True, exist_ok=True)
 
 
 def safe_savefig(fig: plt.Figure, outpath: Path, dpi: int = 300) -> None:
-    """
-    Save figure as PDF with tight bounding box (publication-friendly).
-    """
+    """Write a single PDF figure with tight bounding box for publication export."""
     ensure_dir(outpath.parent)
     fig.savefig(outpath, dpi=dpi, bbox_inches="tight")
     print(f"[OK] Saved: {outpath}")
 
 
 def load_results_jsonl(path: Path) -> pd.DataFrame:
-    """
-    Load per-example Phase-1 results JSONL and flatten into a DataFrame.
-    """
+    """Load per-example JSONL results and return a flattened DataFrame (one row per example)."""
     rows: List[dict] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -176,9 +144,7 @@ def load_results_jsonl(path: Path) -> pd.DataFrame:
 
 
 def load_manifest(path: Path) -> dict:
-    """
-    Load Phase-1 run manifest JSON.
-    """
+    """Load run manifest JSON (authoritative AUROC/bootstrap CI source)."""
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -187,19 +153,18 @@ def load_manifest(path: Path) -> dict:
 # Computation helpers
 # -----------------------------
 def compute_auroc_from_results(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Recompute AUROC from results file as a sanity check (not authoritative).
-    """
+    """Recompute AUROC from per-example scores (diagnostic only; manifest is authoritative)."""
     missing_cols = [c for c in SCORE_COLS.values() if c not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing expected score columns: {missing_cols}")
 
+    # NOTE: potential issue: AUROC assumes score polarity where higher scores imply "more hallucinated".
     y = df[LABEL_COL].values.astype(int)
 
     rows = []
     for name, col in SCORE_COLS.items():
         s = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
-        mask = np.isfinite(s)
+        mask = np.isfinite(s)  # drop NaNs/Infs to avoid implicit failures in sklearn metrics
         if mask.sum() == 0:
             continue
         auc = float(roc_auc_score(y[mask], s[mask]))
@@ -210,15 +175,14 @@ def compute_auroc_from_results(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_ci_table_from_manifest(manifest: dict) -> pd.DataFrame:
-    """
-    Build AUROC + bootstrap CI table from manifest (authoritative for reporting).
-    """
+    """Extract AUROC and bootstrap CI bounds from the manifest into a plotting-ready table."""
     auroc = manifest["scores"]["auroc"]
     boot = manifest["scores"]["bootstrap"]
 
     rows = []
     for label, k in MANIFEST_KEYS.items():
         if (k not in auroc) or (k not in boot):
+            # Single warning per missing scorer to prevent silent omission from reported figures.
             print(f"[WARN] Missing in manifest: {k} (skipping)")
             continue
         rows.append(
@@ -231,15 +195,14 @@ def build_ci_table_from_manifest(manifest: dict) -> pd.DataFrame:
         )
 
     df_ci = pd.DataFrame(rows).sort_values("AUROC", ascending=False).reset_index(drop=True)
+    # Precompute asymmetric errors to match typical bootstrap CI reporting.
     df_ci["err_low"] = df_ci["AUROC"] - df_ci["CI_low"]
     df_ci["err_high"] = df_ci["CI_high"] - df_ci["AUROC"]
     return df_ci
 
 
 def ordered_subset(items: List[str], available: List[str]) -> List[str]:
-    """
-    Keep the relative order of `items` but only return those present in `available`.
-    """
+    """Keep the relative order of `items` but only return those present in `available`."""
     return [x for x in items if x in set(available)]
 
 
@@ -247,11 +210,7 @@ def ordered_subset(items: List[str], available: List[str]) -> List[str]:
 # Figure finishing helper
 # -----------------------------
 def finalize_suptitle(fig: plt.Figure, title: str, *, y: float = 0.99, top_rect: float = 0.96) -> None:
-    """
-    Consistent figure finishing used across Phase 2:
-    - Add suptitle with controlled y position.
-    - Reserve headroom via tight_layout(rect=[..., top_rect]).
-    """
+    """Apply standardized suptitle + tight_layout headroom (shared across Phase 1/2 figures)."""
     fig.suptitle(title, y=y)
     fig.tight_layout(rect=[0, 0, 1, top_rect])
 
@@ -260,9 +219,7 @@ def finalize_suptitle(fig: plt.Figure, title: str, *, y: float = 0.99, top_rect:
 # Plotting functions
 # -----------------------------
 def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
-    """
-    Figure 1 — AUROC comparison (barh with bootstrap CI).
-    """
+    """Figure 1: AUROC comparison (horizontal bars with manifest bootstrap CI)."""
     fig, ax = plt.subplots(figsize=(7.0, 3.8))
 
     y_pos = np.arange(len(ci_df))
@@ -273,10 +230,10 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
         align="center",
         alpha=0.9,
         capsize=4,
-        height=BAR_WIDTH,  # bars a bit slimmer
+        height=BAR_WIDTH,  # slightly slimmer bars for denser label packing
     )
 
-    # Value labels — place clearly ABOVE the CI line using a screen-space offset
+    # Value labels: offset in screen-space to avoid overlap with CI whiskers (stable across x-scales).
     for i, val in enumerate(ci_df["AUROC"].values):
         ax.annotate(
             f"{val:.3f}",
@@ -287,18 +244,18 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
             va="bottom",
             fontsize=int(mpl.rcParams["xtick.labelsize"] * 0.85),
             zorder=5,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),  # keeps it readable over the line
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),  # ensures legibility over CI lines
         )
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels([short_name(s) for s in ci_df["Scorer"].tolist()])
-    ax.invert_yaxis()  # highest AUROC on top
+    ax.invert_yaxis()  # invariant: highest AUROC displayed at the top
 
-    # Random baseline
+    # Reference baseline for random discrimination (binary AUROC = 0.5).
     ax.axvline(0.5, linestyle="--", linewidth=1.5, color="black")
 
     ax.set_xlabel("AUROC (higher = more hallucination-likely)")
-    ax.set_xlim(0.4, 0.8)
+    ax.set_xlim(0.4, 0.8)  # fixed range improves cross-run visual comparability
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
     finalize_suptitle(fig, "AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
@@ -307,10 +264,9 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
-    """
-    AUROC with bootstrap 95% CI (interval plot).
-    """
+    """Figure 2: AUROC with bootstrap 95% CI (interval plot, fixed scorer order)."""
     order = ordered_subset(DEFAULT_ORDER, ci_df["Scorer"].tolist())
+    # NOTE: potential issue: .loc[order] assumes all requested scorers exist; ordered_subset enforces that.
     ci_df_plot = ci_df.set_index("Scorer").loc[order].reset_index()
 
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
@@ -326,7 +282,7 @@ def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.set_yticks(ypos)
     ax.set_yticklabels([short_name(s) for s in ci_df_plot["Scorer"].tolist()])
     ax.axvline(0.5, color="black", linestyle="--", linewidth=1)
-    ax.set_xlim(0.40, 0.80)
+    ax.set_xlim(0.40, 0.80)  # fixed axis supports side-by-side figure comparisons
     ax.invert_yaxis()
 
     ax.set_xlabel("AUROC (higher = better hallucination discrimination)")
@@ -338,9 +294,7 @@ def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    ROC overlay for selected scorers.
-    """
+    """Figure 3: ROC overlays for the preferred scorer subset (NaNs dropped per scorer)."""
     fig, ax = plt.subplots(figsize=(6.0, 5.0))
     y = df[LABEL_COL].values.astype(int)
 
@@ -348,7 +302,7 @@ def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
     for name in roc_show:
         col = SCORE_COLS[name]
         s = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
-        mask = np.isfinite(s)
+        mask = np.isfinite(s)  # per-scorer filtering preserves maximum usable samples
         if mask.sum() == 0:
             continue
         fpr, tpr, _ = roc_curve(y[mask], s[mask])
@@ -366,31 +320,32 @@ def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    Score distributions by hallucination label (boxplots).
-    """
-    # Long format
+    """Figure 4: score distributions by label (boxplots; NaNs/Infs removed)."""
+    # Melt to long form: each row becomes (qid, label, scorer, value) for consistent seaborn handling.
     long_df = df.melt(
         id_vars=["qid", LABEL_COL],
         value_vars=list(SCORE_COLS.values()),
         var_name="ScoreKey",
         value_name="Value",
     )
+    # Map flattened JSON keys back to human-facing scorer names (then shorten for axis labels).
     long_df["Score"] = long_df["ScoreKey"].map(COL_TO_NAME)
     long_df["Score"] = long_df["Score"].map(short_name)
     long_df["Value"] = pd.to_numeric(long_df["Value"], errors="coerce")
     long_df = long_df.replace([np.inf, -np.inf], np.nan).dropna(subset=["Value"])
 
-    # robust order: decide in long names, then map to short names
+    # Robust order: decide in long names, then map to short names for plotting.
     order_long = ordered_subset(DEFAULT_ORDER, list(SCORE_COLS.keys()))
     order = [short_name(s) for s in order_long]
 
     long_df["Score"] = pd.Categorical(long_df["Score"], categories=order, ordered=True)
 
+    # Fixed string labels keep legend ordering stable across plots/exports.
     long_df["hallucinated_str"] = long_df[LABEL_COL].map({0: "No (0)", 1: "Yes (1)"})
 
     fig, ax = plt.subplots(figsize=(8.2, 4.5))
 
+    # NOTE: potential issue: palette is hard-coded; keep consistent with other figures or Phase 2.
     pal = {"No (0)": "#4C72B0", "Yes (1)": "#DD8452"}
 
     sns.boxplot(
@@ -424,9 +379,7 @@ def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    Overall score distributions (all examples, label-agnostic).
-    """
+    """Appendix Figure A: overall score distributions (label-agnostic, same scorer ordering)."""
     long_df = df.melt(
         id_vars=[LABEL_COL],
         value_vars=list(SCORE_COLS.values()),
@@ -458,9 +411,7 @@ def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
-    """
-    AUROC margin above random (ΔAUROC = AUROC − 0.5) with bootstrap CI.
-    """
+    """Appendix Figure B: ΔAUROC above random (AUROC − 0.5) with bootstrap CI."""
     auroc = manifest["scores"]["auroc"]
     boot = manifest["scores"]["bootstrap"]
 
@@ -471,6 +422,7 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
         a = float(auroc[k])
         lo = float(boot[k]["ci_low"])
         hi = float(boot[k]["ci_high"])
+        # Shift both point estimate and CI by the random baseline for direct "above chance" interpretation.
         rows.append({"Scorer": label, "delta": a - 0.5, "lo": lo - 0.5, "hi": hi - 0.5})
 
     b_df = pd.DataFrame(rows).sort_values("delta", ascending=False).reset_index(drop=True)
@@ -483,7 +435,7 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
     ax.errorbar(x=x, y=y, xerr=xerr, fmt="o", capsize=4)
     ax.set_yticks(y)
     ax.set_yticklabels([short_name(s) for s in b_df["Scorer"].tolist()])
-    ax.axvline(0.0, linestyle="--", linewidth=1)  # delta=0 => random
+    ax.axvline(0.0, linestyle="--", linewidth=1)  # delta=0 => random baseline
     ax.set_xlabel("ΔAUROC = AUROC − 0.5 (higher = better than random)")
     ax.set_ylabel("")
     ax.invert_yaxis()
@@ -494,9 +446,7 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
 
 
 def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    Score overlap by label (density plots, 2x2 layout).
-    """
+    """Appendix Figure C: label-conditional score overlap (KDE density; 2×2 panel grid)."""
     panel_order = [
         "LNTP (hallucination score)",
         "MTP (hallucination score)",
@@ -514,6 +464,7 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
         tmp[col] = pd.to_numeric(tmp[col], errors="coerce")
         tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna(subset=[col])
 
+        # NOTE: potential issue: KDE smoothing can be misleading for discrete/heavy-tailed scores; interpret qualitatively.
         sns.kdeplot(data=tmp[tmp[LABEL_COL] == 0], x=col, label="No (0)",  fill=True, alpha=0.35, ax=ax)
         sns.kdeplot(data=tmp[tmp[LABEL_COL] == 1], x=col, label="Yes (1)", fill=True, alpha=0.35, ax=ax)
 
@@ -521,12 +472,12 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
         ax.set_xlabel("Score")
         ax.set_ylabel("Density")
 
-    # Legend nur einmal (oben rechts)
+    # Single shared legend to reduce visual clutter and keep label mapping consistent.
     axes[1].legend(title="Hallucinated", frameon=False)
     for ax in (axes[0], axes[2], axes[3]):
         ax.legend([], [], frameon=False)
 
-    # Suptitle + layout exakt einmal (keine Doppelung)
+    # Suptitle + layout exactly once (avoid double tight_layout calls that can shift panel geometry).
     fig.suptitle(
         "Score overlap by label (density plots)",
         y=0.995,
@@ -539,9 +490,7 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
     
 
 def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    Spearman rank correlation between scorers.
-    """
+    """Appendix Figure D: Spearman rank correlation across scorers (complete-case rows only)."""
     cols = {
         "LNTP": SCORE_COLS["LNTP (hallucination score)"],
         "MTP": SCORE_COLS["MTP (hallucination score)"],
@@ -549,6 +498,7 @@ def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
         "Hidden": SCORE_COLS["Hidden-state probe (OOF)"],
     }
 
+    # Complete-case filtering avoids pairwise-N differences that complicate interpretation.
     mat = pd.DataFrame({k: pd.to_numeric(df[v], errors="coerce") for k, v in cols.items()})
     mat = mat.replace([np.inf, -np.inf], np.nan).dropna(axis=0, how="any")
     corr = mat.corr(method="spearman")
@@ -562,9 +512,7 @@ def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
 
 
 def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
-    """
-    LNTP-low mismatches (low LNTP score vs Hidden score).
-    """
+    """Appendix Figure E: inspect low-LNTP examples vs Hidden probe score (quantile threshold)."""
     x_col = SCORE_COLS["LNTP (hallucination score)"]
     y_col = SCORE_COLS["Hidden-state probe (OOF)"]
 
@@ -573,6 +521,7 @@ def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
     tmp[y_col] = pd.to_numeric(tmp[y_col], errors="coerce")
     tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna()
 
+    # Heuristic: "LNTP-low" defined as bottom quartile on available (finite) LNTP scores.
     thr = float(tmp[x_col].quantile(0.25))
 
     fig, ax = plt.subplots(figsize=(6.5, 5.5))
@@ -593,6 +542,7 @@ def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
 
     ax.set_xlabel("LNTP score")
     ax.set_ylabel("Hidden score")
+    # NOTE: potential issue: seaborn legend order depends on observed hue values; labels are forced for consistency.
     ax.legend(title="Hallucinated", labels=["No (0)", "Yes (1)"], frameon=False)
 
     finalize_suptitle(fig, "LNTP-low mismatches (low LNTP score vs Hidden-state probe)", y=0.97, top_rect=0.97)
@@ -605,10 +555,8 @@ def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
 # -----------------------------
 def run_extras(df: pd.DataFrame) -> None:
     """
-    Optional exploratory blocks from the notebook.
-    Kept out of the paper figure pipeline by default.
-
-    If you want, we can move this into a separate script so the paper pipeline stays clean.
+    Diagnostic-only exploratory analyses (excluded from the paper figure pipeline).
+    NOTE: potential issue: results here depend on internal CV splits and are not part of the manifest-backed reporting.
     """
     from sklearn.model_selection import StratifiedKFold, train_test_split
     from sklearn.linear_model import LogisticRegression
@@ -626,6 +574,7 @@ def run_extras(df: pd.DataFrame) -> None:
     X_old_clean, X_new_clean, y_clean = X_old[mask], X_new[mask], y[mask]
 
     def simulate_oof_probe(X: np.ndarray, y: np.ndarray, n_splits: int = 5, random_state: int = 42) -> np.ndarray:
+        """Train OOF logistic probe via stratified K-fold; returns per-example positive-class scores."""
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
         oof_scores = np.full(len(y), np.nan, dtype=float)
         for train_idx, test_idx in skf.split(X, y):
@@ -688,6 +637,7 @@ def run_extras(df: pd.DataFrame) -> None:
 # -----------------------------
 @dataclass(frozen=True)
 class Args:
+    """Typed CLI configuration for reproducible, script-driven figure generation."""
     results: Path
     manifest: Path
     outdir: Path
@@ -696,11 +646,12 @@ class Args:
 
 
 def parse_args() -> Args:
+    """Parse CLI arguments and resolve paths to absolute locations."""
     p = argparse.ArgumentParser(
         description="Phase 1 Figures — TruthfulQA (Frozen Answers)"
     )
 
-    # Base directory = project root (2 levels above this script)
+    # Base directory convention: project root is two levels above this script.
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parent.parent
 
@@ -726,12 +677,13 @@ def parse_args() -> Args:
 
 
 def main() -> None:
+    """Entry point: load inputs, print diagnostics, render all Phase 1 figures, and export PDFs."""
     args = parse_args()
 
     # Make seaborn respect matplotlib rcParams without imposing its own theme.
     sns.set_theme(style="white", rc={})
 
-    # Apply Phase-2-like styling globally
+    # Apply Phase-2-like styling globally (single source of truth for typography/layout).
     apply_phase2_plot_style(font_scale=args.font_scale)
 
     ensure_dir(args.outdir)
@@ -740,12 +692,12 @@ def main() -> None:
     df = load_results_jsonl(args.results)
     manifest = load_manifest(args.manifest)
 
-    # Sanity check AUROCs from results (optional)
+    # Diagnostic AUROC recomputation from JSONL (useful for catching score polarity/key mismatches).
     auroc_check = compute_auroc_from_results(df)
     print("\n[INFO] AUROC sanity check from results JSONL (not authoritative):")
     print(auroc_check.to_string(index=False))
 
-    # Authoritative AUROC + CI from manifest
+    # Manifest AUROC/CI drives all reported figures (bootstrap details live in the manifest).
     ci_df = build_ci_table_from_manifest(manifest)
     print("\n[INFO] AUROC + bootstrap CI from manifest (authoritative for figures):")
     print(ci_df[["Scorer", "AUROC", "CI_low", "CI_high"]].to_string(index=False))

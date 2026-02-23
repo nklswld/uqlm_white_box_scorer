@@ -1,26 +1,11 @@
 # src/scorers_gradient.py
 """
-Gradient-based (EGH-inspired) primitives for hallucination detection (Hu et al., 2024).
-
-Paper-ready goals of this rewrite:
-- Alignment correctness: uses LLMWrapper.encode_qa() as the single source of truth.
-- Hu-style features:
-    * d_loss    = mean token-wise KL( P(.|Q) || P(.|0) ) over answer prediction positions
-    * ce_loss   = mean token-wise cross-entropy H( P(.|Q), P(.|0) ) over answer prediction positions
-    * h_p       = mean token-wise entropy H( P(.|Q) ) over answer prediction positions
-    * emb_diff  = mean L2 distance between LAST-LAYER hidden states for answer tokens (E feature)
-    * grad_norm = mean L2 norm of gradients wrt UNCONDITIONAL input embeddings for answer tokens,
-                  where the loss is KL( P(.|Q) || P(.|0) ) (G feature)
-- Avoid silent failures:
-    * strict shape checks + deterministic fallbacks if strict=False
-- Batching/Caching hooks:
-    * compute_egh_primitives_batch() computes d_loss + ce_loss + h_p + emb_diff in batches (fast path)
-      (grad_norm remains per-sample by default due to memory/graph complexity)
-
-IMPORTANT:
-- This file returns RAW primitives. For the Phase-1 runner, your “hallucination-likely” direction
-  should be handled at the scorer/feature-mapping layer (e.g., by negating KL/CE if desired).
-
+Compute gradient- and embedding-based primitives for QA hallucination scoring.
+Inputs: (question:str, answer:str) pairs and an LLMWrapper providing encode_qa() alignment.
+Outputs: per-sample raw floats (d_loss, ce_loss, h_p, emb_diff, grad_norm) plus optional fixed-size vectors (e_vec, g_vec).
+The primitives are "orientation-agnostic": no sign/polarity is applied here; downstream scorers map to "hallucination-likely".
+Determinism: forward-only paths are deterministic given model + inputs; grad_norm depends on exact graph/precision and must be
+recomputed per sample (no randomness introduced here).
 """
 
 from __future__ import annotations
@@ -35,6 +20,7 @@ from modeling_llm import LLMWrapper
 # Score orientation contract (central, explicit)
 # ---------------------------------------------------------------------
 
+# Convention: this module returns raw (unsigned) primitives; any "higher=more hallu" convention is enforced downstream.
 ORIENTATION_CONTRACT: Dict[str, str] = {
     # Hu-style divergences: often hallu -> LOWER divergence/CE (closer to uncond).
     # Keep raw primitives here; direction can be enforced downstream if desired.
@@ -51,6 +37,7 @@ ORIENTATION_CONTRACT: Dict[str, str] = {
 
 
 def _safe_pad_token_id(llm: LLMWrapper) -> int:
+    # Prefer tokenizer-defined pad; fall back to eos; final fallback is 0 (may be semantically wrong for some tokenizers).
     tok = llm.tokenizer
     if getattr(tok, "pad_token_id", None) is not None:
         return int(tok.pad_token_id)
@@ -65,21 +52,14 @@ def _encode_cond_uncond(
     answer: str,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], int, int, torch.Tensor]:
     """
-    Build aligned conditional/unconditional inputs using the encode_qa alignment contract.
-
-    conditional:   [prompt(question) + answer] with attention_mask=1
-    unconditional: [PAD...PAD + answer] with attention_mask=1
-      - We intentionally keep attention_mask=1 on the prefix to avoid a silent alignment bug where
-        the logits predicting the first answer token would otherwise come from a masked position.
-
-    Returns:
-      inputs_cond, inputs_uncond, ans_start, a_len, answer_token_ids
+    Build aligned conditional/unconditional inputs using llm.encode_qa() as source of truth.
+    Returns: (inputs_cond, inputs_uncond, ans_start, a_len, answer_token_ids).
     """
     device = llm.input_device
     tok = llm.tokenizer
     pad_id = _safe_pad_token_id(llm)
 
-    # Single source of truth for prompt and answer start index.
+    # Alignment contract: encode_qa defines prompt construction and answer_start_idx.
     enc = llm.encode_qa(question, answer)
     input_ids_c = enc["input_ids"]  # (1, seq_len)
     attn_c = enc["attention_mask"]  # (1, seq_len)
@@ -89,12 +69,12 @@ def _encode_cond_uncond(
     if ans_start < 0 or ans_start > seq_len:
         raise ValueError(f"answer_start_idx out of range: {ans_start} for seq_len={seq_len}")
 
-    # FIX (minimal): derive answer token ids directly from conditional suffix to guarantee token-boundary consistency.
-    # Answer tokens occupy positions [ans_start : seq_len) in input_ids_c.
+    # Answer token ids are derived from the conditional suffix to preserve tokenizer boundary consistency.
     a_ids_t = input_ids_c[:, ans_start:seq_len]
     a_len = int(a_ids_t.size(1))
 
     if a_len == 0:
+        # Degenerate case: no answer tokens -> deterministic zero primitives (avoid downstream shape assumptions).
         dummy = torch.tensor([[pad_id]], dtype=torch.long, device=device)
         inputs = {"input_ids": dummy, "attention_mask": torch.ones_like(dummy)}
         return (
@@ -105,11 +85,11 @@ def _encode_cond_uncond(
             torch.zeros((1, 0), dtype=torch.long, device=device),
         )
 
-    # Unconditional: prefix length must match ans_start for perfect alignment.
+    # Unconditional input: same answer suffix, prefix padded to exactly ans_start for time-step alignment.
     prefix = torch.full((1, ans_start), pad_id, dtype=torch.long, device=device)
     input_ids_u = torch.cat([prefix, a_ids_t.to(device)], dim=1)  # (1, ans_start + a_len)
 
-    # Keep attention_mask=1 everywhere to ensure "predict first answer token" position is valid.
+    # NOTE: potential issue: attention_mask=1 on padded prefix is intentional to avoid masking out the "predict first answer token" position.
     attn_u = torch.ones_like(input_ids_u, dtype=torch.long, device=device)
 
     inputs_cond = {"input_ids": input_ids_c, "attention_mask": attn_c}
@@ -121,12 +101,9 @@ def _encode_cond_uncond(
 
 def _prediction_slice(ans_start: int, a_len: int) -> Tuple[int, int]:
     """
-    For a causal LM, logits at position t predict token at position t+1.
-    Answer tokens occupy positions [ans_start, ans_start + a_len - 1].
-    So the logits predicting those answer tokens live at positions:
-      pred_start = ans_start - 1
-      pred_end   = ans_start + a_len - 1   (exclusive end index)
+    Map answer token positions to the causal-LM logit slice that predicts them (t predicts t+1).
     """
+    # Invariant: logits[:, pred_start:pred_end] align to answer tokens [ans_start : ans_start+a_len).
     pred_start = ans_start - 1
     pred_end = ans_start + a_len - 1
     return pred_start, pred_end
@@ -134,9 +111,7 @@ def _prediction_slice(ans_start: int, a_len: int) -> Tuple[int, int]:
 
 def _kl_tokenwise_from_logits(logits_p: torch.Tensor, logits_q: torch.Tensor) -> torch.Tensor:
     """
-    Tokenwise KL(P || Q) for distributions from logits.
-    Inputs: (B, T, V)
-    Output: (B, T)
+    Tokenwise KL(P || Q) from logits, with P defined by logits_p and Q by logits_q.
     """
     logp = torch.log_softmax(logits_p, dim=-1)
     logq = torch.log_softmax(logits_q, dim=-1)
@@ -146,10 +121,7 @@ def _kl_tokenwise_from_logits(logits_p: torch.Tensor, logits_q: torch.Tensor) ->
 
 def _cross_entropy_tokenwise_from_logits(logits_p: torch.Tensor, logits_q: torch.Tensor) -> torch.Tensor:
     """
-    Tokenwise cross-entropy H(P, Q) where P comes from logits_p and Q from logits_q.
-    Inputs: (B, T, V)
-    Output: (B, T)
-    H(P,Q) = - sum_x P(x) log Q(x)
+    Tokenwise cross-entropy H(P, Q) where P is from logits_p and Q is from logits_q.
     """
     logq = torch.log_softmax(logits_q, dim=-1)
     p = torch.softmax(logits_p, dim=-1)
@@ -158,10 +130,7 @@ def _cross_entropy_tokenwise_from_logits(logits_p: torch.Tensor, logits_q: torch
 
 def _entropy_tokenwise_from_logits(logits_p: torch.Tensor) -> torch.Tensor:
     """
-    Tokenwise entropy H(P) where P comes from logits_p.
-    Inputs: (B, T, V)
-    Output: (B, T)
-    H(P) = - sum_x P(x) log P(x)
+    Tokenwise entropy H(P) where P is from logits_p.
     """
     logp = torch.log_softmax(logits_p, dim=-1)
     p = logp.exp()
@@ -175,9 +144,9 @@ def _common_answer_len(
     a_len: int,
 ) -> int:
     """
-    Return the maximal common answer-token length L such that both
-    conditional and unconditional sequences contain [ans_start : ans_start + L).
+    Compute the largest L such that both sequences contain answer span [ans_start : ans_start+L).
     """
+    # Silent mismatch guard: unconditional may be shorter if upstream tokenization/alignment assumptions break.
     if a_len <= 0:
         return 0
     if ans_start < 0:
@@ -202,16 +171,8 @@ def compute_egh_primitives_batch(
     strict: bool = True,
 ) -> List[Dict[str, float]]:
     """
-    Batched computation of:
-      - d_loss (KL gap)
-      - ce_loss (cross-entropy H(P(.|Q), P(.|0)))
-      - h_p (entropy H(P(.|Q)))
-      - emb_diff (last-layer hidden state diff on answer tokens)
-
-    grad_norm is NOT computed here (set to 0.0), because it requires graphs/backward.
-    Use compute_egh_primitives_for_qa(...) for grad_norm per sample.
-
-    Returns list aligned with qa_pairs.
+    Batched forward-only primitives: d_loss, ce_loss, h_p, emb_diff (grad_norm is set to 0.0).
+    Returns a list aligned 1:1 with qa_pairs; strict=False yields deterministic zero-filled fallbacks on failure.
     """
     model = llm.model
     model.eval()
@@ -224,7 +185,7 @@ def compute_egh_primitives_batch(
 
             cond_feats = []
             uncond_feats = []
-            meta: List[Tuple[int, int]] = []  # (ans_start, a_len)
+            meta: List[Tuple[int, int]] = []  # (ans_start, a_len) per sample; used to slice logits/hidden states safely.
 
             for q, a in batch:
                 inputs_c, inputs_u, ans_start, a_len, _ = _encode_cond_uncond(llm, q, a)
@@ -243,6 +204,7 @@ def compute_egh_primitives_batch(
                 meta.append((ans_start, a_len))
 
             tok = llm.tokenizer
+            # Padding is performed by the tokenizer to preserve model-specific pad semantics.
             cond_batch = tok.pad(cond_feats, return_tensors="pt").to(llm.input_device)
             uncond_batch = tok.pad(uncond_feats, return_tensors="pt").to(llm.input_device)
 
@@ -254,11 +216,11 @@ def compute_egh_primitives_batch(
             h_c_last = out_c.hidden_states[-1]
             h_u_last = out_u.hidden_states[-1]
 
-            # Sanity: batch dims match
+            # Alignment invariant: batch dimension must match; otherwise indices/meta no longer correspond.
             if logits_c.size(0) != logits_u.size(0) or h_c_last.size(0) != h_u_last.size(0):
                 if strict:
                     raise RuntimeError("Batch size mismatch between conditional/unconditional forward outputs.")
-                # fallback: zeros for this batch
+                # Deterministic batch-level fallback: preserve output length and ordering.
                 results.extend(
                     [
                         {"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "emb_diff": 0.0, "grad_norm": 0.0, "g_vec": [], "e_vec": []}
@@ -269,31 +231,33 @@ def compute_egh_primitives_batch(
 
             for i, (ans_start, a_len) in enumerate(meta):
                 if a_len <= 0:
+                    # Degenerate answer span -> do not emit NaNs (stable aggregation downstream).
                     results.append({"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "emb_diff": 0.0, "grad_norm": 0.0, "g_vec": [], "e_vec": []})
                     continue
 
                 pred_start, pred_end = _prediction_slice(ans_start, a_len)
                 if pred_start < 0 or pred_end <= pred_start:
+                    # NOTE: potential issue: ans_start==0 implies pred_start=-1; caller/encode_qa should ensure answer follows a prompt token.
                     results.append({"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "emb_diff": 0.0, "grad_norm": 0.0, "g_vec": [], "e_vec": []})
                     continue
 
-                # Slice logits once
+                # Slice only the answer-prediction logits; everything else is irrelevant to the primitives.
                 lc = logits_c[i : i + 1, pred_start:pred_end, :]
                 lu = logits_u[i : i + 1, pred_start:pred_end, :]
 
-                # d_loss: KL gap on answer prediction positions
+                # d_loss: KL(P(.|Q) || P(.|0)) over answer prediction positions.
                 kl_tok = _kl_tokenwise_from_logits(lc, lu)
                 d_loss = float(kl_tok.mean().item())
 
-                # ce_loss: cross-entropy H(P(.|Q), P(.|0))
+                # ce_loss: H(P(.|Q), P(.|0)) over answer prediction positions.
                 ce_tok = _cross_entropy_tokenwise_from_logits(lc, lu)
                 ce_loss = float(ce_tok.mean().item())
 
-                # h_p: entropy H(P(.|Q))
+                # h_p: H(P(.|Q)) over answer prediction positions.
                 h_tok = _entropy_tokenwise_from_logits(lc)
                 h_p = float(h_tok.mean().item())
 
-                # emb_diff: robustly compare only the maximal common answer span
+                # emb_diff: compare last-layer hidden states on the maximal common answer span (avoids OOB on padding/length mismatches).
                 seq_len_c = int(h_c_last.size(1))
                 seq_len_u = int(h_u_last.size(1))
                 L = _common_answer_len(seq_len_c, seq_len_u, ans_start, a_len)
@@ -312,6 +276,7 @@ def compute_egh_primitives_batch(
         return results
 
     except Exception:
+        # Deterministic failure mode for strict=False: preserve list length and ordering to keep alignment with qa_pairs.
         if strict:
             raise
         return [{"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "emb_diff": 0.0, "grad_norm": 0.0, "g_vec": [], "e_vec": []} for _ in qa_pairs]
@@ -331,23 +296,8 @@ def compute_egh_primitives_for_qa(
     chunk_size: Optional[int] = None,
 ) -> Dict[str, float]:
     """
-    Compute EGH-inspired primitives (feature-level signals), NOT the full EGH detector:
-
-      - d_loss    : mean token-wise KL( P(.|Q) || P(.|0) ) over answer prediction positions
-      - ce_loss   : mean token-wise cross-entropy H( P(.|Q), P(.|0) ) over answer prediction positions
-      - h_p       : mean token-wise entropy H( P(.|Q) ) over answer prediction positions
-      - emb_diff  : mean L2 distance between conditional vs unconditional LAST-LAYER hidden states
-                   (answer token positions)  -> Hu-style "E"
-      - grad_norm : mean L2 norm of gradients wrt UNCONDITIONAL input embeddings (answer positions),
-                   where the loss is the KL above -> Hu-style "G"
-
-    chunk_size:
-      - None (default): single backward over full answer span
-      - int: chunked loss accumulation with retain_graph=True (only if needed)
-
-    Output contract:
-      Returns RAW floats. Any direction/orientation used for “hallucination-likely”
-      should be applied downstream (e.g., notebook or feature mapping).
+    Compute per-QA raw primitives; includes grad_norm via a backward pass on unconditional embeddings.
+    chunk_size optionally accumulates KL over time to reduce peak memory (retain_graph=True per chunk).
     """
     try:
         model = llm.model
@@ -355,10 +305,12 @@ def compute_egh_primitives_for_qa(
 
         inputs_c, inputs_u, ans_start, a_len, _ = _encode_cond_uncond(llm, question, answer)
         if a_len <= 0:
+            # Stable zero output on empty answer; prevents downstream NaNs/shape drift.
             return {"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "grad_norm": 0.0, "emb_diff": 0.0, "g_vec": [], "e_vec": []}
         
         pred_start, pred_end = _prediction_slice(ans_start, a_len)
         if pred_start < 0 or pred_end <= pred_start:
+            # NOTE: potential issue: invalid prediction slice implies misaligned ans_start/a_len w.r.t. causal shift.
             return {"d_loss": 0.0, "ce_loss": 0.0, "h_p": 0.0, "grad_norm": 0.0, "emb_diff": 0.0, "g_vec": [], "e_vec": []}
 
         # ------------------------------------------------------------------
@@ -368,6 +320,7 @@ def compute_egh_primitives_for_qa(
             out_c = model(**inputs_c, output_hidden_states=True, use_cache=False)
             out_u = model(**inputs_u, output_hidden_states=True, use_cache=False)
 
+            # Time alignment: slice logits that predict answer tokens (causal shift handled by _prediction_slice()).
             logits_c = out_c.logits[:, pred_start:pred_end, :]
             logits_u = out_u.logits[:, pred_start:pred_end, :]
 
@@ -380,7 +333,7 @@ def compute_egh_primitives_for_qa(
             h_tok = _entropy_tokenwise_from_logits(logits_c)  # (1, T_pred)
             h_p = float(h_tok.mean().item())
 
-            # Hu-style E: last hidden layer as "embedding"
+            # Hu-style "E": last-layer hidden state difference on answer token positions (not pooled CLS-style).
             h_c_last = out_c.hidden_states[-1]  # (1, seq_len_c, H)
             h_u_last = out_u.hidden_states[-1]  # (1, seq_len_u, H)
 
@@ -391,20 +344,21 @@ def compute_egh_primitives_for_qa(
 
 
             if L <= 0:
+                # Deterministic fallback: no comparable answer span -> zero scalar and empty vector.
                 emb_diff = 0.0
                 e_vec = torch.zeros((0,), device=llm.input_device)
             else:
                 h_c_ans = h_c_last[:, ans_start : ans_start + L, :]
                 h_u_ans = h_u_last[:, ans_start : ans_start + L, :]
 
-                # Scalar diagnostic
+                # Scalar diagnostic: mean tokenwise L2 distance between conditional and unconditional hidden states.
                 emb_diff = float(torch.norm(h_c_ans - h_u_ans, dim=-1).mean().item())
 
-                # E_vector (fixed-size): mean over answer tokens -> (H,)
+                # Fixed-size vector: mean over answer tokens to (H,), enabling downstream linear probes / aggregation.
                 e_vec = (h_c_ans - h_u_ans).mean(dim=1).squeeze(0)   # shape (H,)
 
 
-            # Detach conditional logits for gradient loss
+            # Detach conditional logits: gradients should flow only through unconditional embeddings for "G".
             logits_c_det = logits_c.detach()
 
         # ------------------------------------------------------------------
@@ -412,10 +366,11 @@ def compute_egh_primitives_for_qa(
         # ------------------------------------------------------------------
         input_embeddings = model.get_input_embeddings()
 
-        # Build grad-enabled unconditional embeddings
+        # Gradients are taken w.r.t. unconditional *input embeddings* (not weights); detach to avoid accidental parameter grads.
         emb_u = input_embeddings(inputs_u["input_ids"]).detach()
         emb_u.requires_grad_(True)
 
+        # Ensure a clean gradient state; avoids silent accumulation across calls in long-running processes.
         model.zero_grad(set_to_none=True)
         out_u_emb = model(
             inputs_embeds=emb_u,
@@ -425,7 +380,7 @@ def compute_egh_primitives_for_qa(
 
         logits_u_emb = out_u_emb.logits[:, pred_start:pred_end, :]  # (1, T_pred_u, V)
 
-        # Ensure time alignment for KL
+        # Critical invariant: KL is computed token-aligned in time; mismatch implies invalid gradient feature.
         if logits_u_emb.size(1) != logits_c_det.size(1):
             if strict:
                 raise RuntimeError(
@@ -441,15 +396,18 @@ def compute_egh_primitives_for_qa(
                 "e_vec": e_vec.detach().to(torch.float32).cpu().tolist() if "e_vec" in locals() else [],
             }
 
+        # KL(P(.|Q) || P(.|0)) with P fixed (detached); gradients propagate only through unconditional logits/embeddings.
         logp_c = torch.log_softmax(logits_c_det, dim=-1)
         p_c = logp_c.exp()
         logq_u = torch.log_softmax(logits_u_emb, dim=-1)
         kl_per_tok = torch.sum(p_c * (logp_c - logq_u), dim=-1)  # (1, T_pred)
 
         if chunk_size is None:
+            # Single backward is simplest; use chunking only when necessary to avoid retain_graph overhead.
             loss = kl_per_tok.mean()
             loss.backward()
         else:
+            # NOTE: potential issue: chunking uses repeated backward(retain_graph=True), trading memory for extra compute and potential slowdown.
             cs = int(chunk_size)
             T_pred = int(kl_per_tok.size(1))
             for s in range(0, T_pred, cs):
@@ -458,12 +416,12 @@ def compute_egh_primitives_for_qa(
                 loss_chunk.backward(retain_graph=True)
 
         if emb_u.grad is None:
+            # Hard failure: grad_norm is undefined; do not silently report zeros under strict=True.
             raise RuntimeError("Gradient is None after backward() (unexpected).")
 
-        # grad over maximal common answer span (same principle as emb_diff)
+        # Compute grad feature over the maximal in-bounds answer span; mirrors emb_diff logic but only unconditional has grads.
         seq_len_u_emb = int(emb_u.size(1))
-        # For grad, only unconditional length matters (it’s the only one with grads),
-        # but we still clamp by a_len and available tokens.
+        # NOTE: unconditional/unconditional passed intentionally to reuse clamping logic without introducing new helpers.
         Lg = _common_answer_len(seq_len_u_emb, seq_len_u_emb, ans_start, a_len)
 
         if Lg <= 0:
@@ -472,10 +430,10 @@ def compute_egh_primitives_for_qa(
         else:
             grad_ans = emb_u.grad[:, ans_start : ans_start + Lg, :]  # (1, Lg, H)
 
-            # Scalar diagnostic
+            # Scalar diagnostic: mean tokenwise gradient L2 norm (embedding space).
             grad_norm = float(grad_ans.norm(dim=-1).mean().item())
 
-            # G_vector (fixed-size): mean over answer tokens -> (H,)
+            # Fixed-size vector: mean over answer tokens to (H,), matching e_vec dimensionality.
             g_vec = grad_ans.mean(dim=1).squeeze(0)  # shape (H,)
 
         return {
@@ -489,6 +447,7 @@ def compute_egh_primitives_for_qa(
         }
 
     except Exception:
+        # strict=False provides a deterministic "no-signal" record to keep pipelines running and preserve alignment.
         if strict:
             raise  
         return {

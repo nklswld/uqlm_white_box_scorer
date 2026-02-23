@@ -1,22 +1,33 @@
-# src/run_phase1_truthfulqa.py
-from __future__ import annotations  # NOTE: Enables forward refs + cleaner type hints.
+"""Phase 1 evaluation script for TruthfulQA hallucination detection on frozen model outputs.
 
-import argparse  # NOTE: CLI interface for reproducible experiment runs.
-import json  # NOTE: Reading/writing JSONL + manifest.
-import logging  # NOTE: Structured logs for auditability.
-import os  # NOTE: Environment configuration (Torch runtime flags, seeds).
-import platform  # NOTE: System info for manifest.
-import sys  # NOTE: Python version + runtime metadata for manifest.
+Reads a JSONL benchmark of (question, frozen model answer, hallucination label) and computes
+multiple per-example scores (logit-based, gradient-based primitives, hidden-state probes).
+Writes (i) a per-sample JSONL with all scores and (ii) a run manifest with config, versions,
+AUROC summaries, and bootstrap confidence intervals (including stored bootstrap indices).
+Deterministic given the provided seed and fixed inputs; GPU kernels/backends may still induce
+minor nondeterminism depending on hardware/torch version despite determinism flags.
+"""
+
+# src/run_phase1_truthfulqa.py
+from __future__ import annotations  # NOTE: Forward refs for type hints; no runtime effect.
+
+import argparse  # NOTE: CLI defines the full experimental protocol (paths, model, seeds).
+import json  # NOTE: JSONL I/O + manifest serialization.
+import logging  # NOTE: Audit-friendly logs (progress + fatal errors).
+import os  # NOTE: Runtime configuration (torch backend flags, hash seed).
+import platform  # NOTE: System metadata for the manifest.
+import sys  # NOTE: Python/runtime metadata for the manifest.
 import time  # NOTE: Timestamping output artifacts.
 from dataclasses import dataclass, asdict  # NOTE: Typed config/results serialization.
-from pathlib import Path  # NOTE: Stable file path handling across OS.
-from typing import Any, Dict, List, Tuple  # NOTE: Type hints for clarity.
+from pathlib import Path  # NOTE: OS-independent path handling.
+from typing import Any, Dict, List, Tuple  # NOTE: Explicit types at API boundaries.
 
-import numpy as np  # NOTE: Core numerical operations + arrays.
+import numpy as np  # NOTE: Numeric arrays + guardrail checks.
 
 
 def configure_torch_runtime() -> None:
-    # NOTE: Runtime flags that can affect speed/memory determinism.
+    """Best-effort torch runtime/backends configuration before importing torch."""
+    # NOTE: Environment variables must be set pre-import to affect torch allocator/SDPA behavior.
     os.environ.setdefault("TORCH_SDPA_ENABLE", "1")
     os.environ.setdefault("TORCH_SDPA_DISABLE", "0")
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -24,7 +35,7 @@ def configure_torch_runtime() -> None:
     try:
         import torch
 
-        # NOTE: Enable fast SDPA backends when CUDA is available (best-effort).
+        # NOTE: Prefer faster SDPA backends on CUDA; toggles are version-dependent (best-effort).
         if torch.cuda.is_available():
             cuda_backends = getattr(torch.backends, "cuda", None)
             if cuda_backends is not None:
@@ -37,7 +48,7 @@ def configure_torch_runtime() -> None:
                     if callable(fn):
                         fn(arg)
     except Exception:
-        # NOTE: Defensive: do not crash if runtime flags differ by torch version.
+        # NOTE: Silent fallback: torch missing/older/newer APIs should not block evaluation runs.
         pass
 
 
@@ -46,19 +57,20 @@ configure_torch_runtime()
 import torch  # noqa: E402  # NOTE: Imported after environment runtime configuration.
 import transformers  # noqa: E402  (Should-Fix A)  # NOTE: Version captured in manifest.
 import sklearn  # noqa: E402        (Should-Fix A)  # NOTE: Version captured in manifest.
-from sklearn.metrics import roc_auc_score  # noqa: E402  # NOTE: AUROC metric.
+from sklearn.metrics import roc_auc_score  # noqa: E402  # NOTE: AUROC metric implementation.
 
 from modeling_llm import LLMWrapper  # noqa: E402  # NOTE: Unified model/tokenizer wrapper.
-from scorers_logit import compute_lntp_mtp_for_qa_batch  # noqa: E402  # NOTE: LNTP/MTP scorer.
+from scorers_logit import compute_lntp_mtp_for_qa_batch  # noqa: E402  # NOTE: LNTP/MTP scorers.
 from scorers_gradient import compute_egh_primitives_for_qa  # noqa: E402  # NOTE: EGH primitives.
 from scorers_hidden import build_hidden_feature_matrix, HiddenFeatureConfig, oof_logreg_scores  # noqa: E402
-# NOTE: Hidden-state feature extraction + OOF probe training.
+# NOTE: Hidden-state features + centralized OOF logistic regression probe.
 from bootstrap import BootstrapConfig, bootstrap_auc, bootstrap_auc_diff_with_indices  # noqa: E402
-# NOTE: Bootstrap CI + delta-vs-random with stored indices.
+# NOTE: Stratified bootstrap CIs and AUC deltas with stored resample indices.
 
 
 def setup_logging(verbosity: int) -> None:
-    # NOTE: Keep logging predictable across runs and verbosity levels.
+    """Configure a consistent log format and verbosity threshold."""
+    # NOTE: Keep log level mapping stable across scripts for comparable output.
     level = logging.WARNING
     if verbosity == 1:
         level = logging.INFO
@@ -72,23 +84,25 @@ def setup_logging(verbosity: int) -> None:
     )
 
 
-logger = logging.getLogger(__name__)  # NOTE: Module-level logger.
+logger = logging.getLogger(__name__)  # NOTE: Module-level logger used by helpers + main.
 
 
 def set_global_seeds(seed: int) -> None:
-    # NOTE: Seed all relevant RNGs for reproducibility.
+    """Seed Python hashing, NumPy, and torch RNGs for run-to-run reproducibility."""
+    # NOTE: PYTHONHASHSEED stabilizes hash-based iteration order (e.g., dict/set) across runs.
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # NOTE: Determinism flags (can impact speed).
+    # NOTE: cuDNN determinism reduces nondeterminism but can degrade throughput.
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
 def compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
-    # NOTE: Minimal safe AUROC wrapper with sanity checks.
+    """Compute AUROC with strict shape/class guardrails."""
+    # NOTE: Fail fast on mismatched lengths or single-class labels to avoid silent NaNs.
     y = np.asarray(y).reshape(-1).astype(int)
     s = np.asarray(s).reshape(-1).astype(float)
     if y.shape[0] != s.shape[0]:
@@ -99,7 +113,8 @@ def compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
 
 
 def bootstrap_result_to_dict(res: Any) -> Dict[str, Any]:
-    # NOTE: Normalize bootstrap result objects into JSON-serializable dicts.
+    """Convert bootstrap result objects to JSON-serializable dictionaries."""
+    # NOTE: Supports dataclass results and lightweight objects returned by bootstrap utilities.
     try:
         return asdict(res)
     except Exception:
@@ -116,7 +131,8 @@ def bootstrap_result_to_dict(res: Any) -> Dict[str, Any]:
 
 
 def _jsonify(obj: Any) -> Any:
-    # NOTE: Convert NumPy/scalars/containers into plain JSON-friendly types.
+    """Recursively convert NumPy containers/scalars into plain JSON-friendly types."""
+    # NOTE: Ensures json.dumps() does not fail on NumPy dtypes or arrays.
     if isinstance(obj, dict):
         return {k: _jsonify(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -131,27 +147,28 @@ def _jsonify(obj: Any) -> Any:
 
 
 def ensure_parent_dir(path: Path) -> None:
-    # NOTE: Ensure output directory exists.
+    """Create the parent directory for an output file path if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def die(msg: str, code: int = 2) -> None:
-    # NOTE: Centralized fatal exit with logging.
+    """Log a fatal error and exit with a non-zero status."""
     logger.error(msg)
     raise SystemExit(code)
 
 
 @dataclass(frozen=True)
 class TruthfulQAExample:
-    # NOTE: Minimal record for frozen-answer evaluation.
+    """Single frozen-answer evaluation record for TruthfulQA."""
     qid: str
     question: str
     model_answer: str
-    label: int  # 1 = hallucinated, 0 = non-hallucinated
+    label: int  # NOTE: Binary target: 1 = hallucinated, 0 = non-hallucinated.
 
 
 def load_truthfulqa_examples(path: Path) -> List[TruthfulQAExample]:
-    # NOTE: Load JSONL of frozen outputs + labels.
+    """Load TruthfulQA frozen outputs from a JSONL file into typed records."""
+    # NOTE: Expects keys: qid, question, model_answer, hallucinated (cast to int label).
     examples: List[TruthfulQAExample] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -171,7 +188,8 @@ def load_truthfulqa_examples(path: Path) -> List[TruthfulQAExample]:
 
 @dataclass(frozen=True)
 class Phase1Config:
-    # NOTE: All experiment knobs are explicitly represented here for reproducibility.
+    """Immutable run configuration captured into the manifest for reproducibility."""
+    # NOTE: Keep all knobs explicit to make runs fully reconstructable from the manifest.
     input_jsonl: Path
     output_jsonl: Path
     output_manifest: Path
@@ -193,14 +211,15 @@ class Phase1Config:
 
 
 def parse_args() -> Phase1Config:
-    # NOTE: Resolve paths relative to repository /phase_1_replication root.
+    """Parse CLI arguments and return a fully-resolved Phase1Config."""
+    # NOTE: Resolve relative paths against repo root (.../phase_1_replication) for portability.
     base_dir = Path(__file__).resolve().parents[1]  # .../phase_1_replication
 
     def _resolve(p: str) -> Path:
         pp = Path(p)
         return pp if pp.is_absolute() else (base_dir / pp)
 
-    # NOTE: CLI args define the full experimental protocol (inputs, outputs, model, seeds).
+    # NOTE: CLI defines inputs/outputs, model backend, and all randomness controls.
     p = argparse.ArgumentParser(description="Phase 1 – TruthfulQA Hallucination Detection (Frozen Outputs)")
     p.add_argument("--input", type=str, default="benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl")
     p.add_argument("--output", type=str, default="outputs/phase1_truthfulqa_hallu_results_300.jsonl")
@@ -215,7 +234,7 @@ def parse_args() -> Phase1Config:
     p.add_argument("--ci", type=float, default=0.95)
     p.add_argument("--n_splits", type=int, default=5)
 
-    p.add_argument("--hidden_layers", type=str, default="16") # middle layer
+    p.add_argument("--hidden_layers", type=str, default="16") # NOTE: Comma-separated layer indices (default: single mid-layer).
 
     p.add_argument("--hidden_pooling", type=str, default="mean_answer")
     p.add_argument("--hidden_normalize", action="store_true")
@@ -247,8 +266,10 @@ def parse_args() -> Phase1Config:
 # main () starts
 # ----------------------------
 def main() -> None:
+    """Run Phase 1 scoring, bootstrapping, and artifact writing for TruthfulQA frozen outputs."""
     cfg = parse_args()
-    setup_logging(verbosity=1)  # NOTE: Use INFO by default for progress logging.
+    # NOTE: `cfg.torch_dtype` and `cfg.batch_size` are recorded for protocol completeness but not used directly in this script.
+    setup_logging(verbosity=1)  # NOTE: INFO-level progress logs by default.
     set_global_seeds(cfg.seed)
 
     ensure_parent_dir(cfg.output_jsonl)
@@ -269,7 +290,7 @@ def main() -> None:
     # ----------------------------
     # Unsupervised scorers (LNTP, MTP) on frozen answers
     # ----------------------------
-    # NOTE: All methods evaluate the same frozen model answers (no generation here).
+    # NOTE: All scorers operate on the same frozen (question, answer) pairs; no text generation occurs here.
     questions = [ex.question for ex in examples]
     answers = [ex.model_answer for ex in examples]
 
@@ -277,8 +298,8 @@ def main() -> None:
         llm,
         questions,
         answers,
-        orientation="uncertainty",
-        return_log_stats=True,
+        orientation="uncertainty",  # NOTE: Score polarity convention: higher = more uncertainty = more likely hallucination.
+        return_log_stats=True,  # NOTE: Store alignment/log-prob stats for auditing potential scoring failures.
     )
 
     s_lntp_u_np = np.asarray(s_lntp_u, dtype=np.float64)
@@ -289,7 +310,7 @@ def main() -> None:
     # ----------------------------
     # EGH primitives (Hu et al.): for (a) supervised probe and (b) unsupervised diagnostics
     # ----------------------------
-    # NOTE: Compute per-example primitives; later used for OOF probe and for diagnostic AUROCs/plots.
+    # NOTE: Compute per-example primitives once; reuse for OOF probe + raw diagnostic AUROCs.
     X_egh_rows: List[List[float]] = []
 
     # Raw primitives as unsupervised scores (for AUROC + plots)
@@ -300,6 +321,7 @@ def main() -> None:
     s_egh_entropy: List[float] = []
 
     k = 0
+    # NOTE: potential issue: the sanity-check gate depends on `k`, but `k` is never incremented, so the check is effectively disabled.
     sanity_checked = 0
 
     for i, ex in enumerate(examples):
@@ -310,28 +332,29 @@ def main() -> None:
         d = float(prim["d_loss"])
         e = float(prim["emb_diff"])
 
-        # New primitives (Hu-style)
+        # NOTE: Additional Hu-style primitives; treated as diagnostics unless explicitly probed.
         ce = float(prim["ce_loss"])
         hp = float(prim["h_p"])
 
         g_vec = prim.get("g_vec", [])
         e_vec = prim.get("e_vec", [])
 
-        # supervised probe uses [G_vector, E_vector] only
+        # NOTE: Supervised EGH probe uses the concatenated (G_vector, E_vector) features only.
         X_egh_rows.append(g_vec + e_vec)
 
         if len(g_vec) == 0 or len(e_vec) == 0:
+            # NOTE: Empty feature vectors break probe training and indicate scoring/alignment failure upstream.
             raise RuntimeError(f"Empty g_vec/e_vec at sample {i} (qid={ex.qid}).")
 
 
-        # unsupervised primitives for reporting/plots
+        # NOTE: Unsupervised primitives stored verbatim for reporting/ablation diagnostics.
         s_egh_grad.append(g)
         s_egh_emb.append(e)
         s_egh_kl.append(d)
         s_egh_ce.append(ce)
         s_egh_entropy.append(hp)
 
-        # NOTE: Optional spot-check for finiteness / non-degenerate primitives.
+        # NOTE: Optional spot-check for finiteness / degenerate primitives.
         if k > 0 and sanity_checked < k:
             sanity_checked += 1
             if (g == 0.0 and d == 0.0) or (
@@ -359,7 +382,7 @@ def main() -> None:
     # ----------------------------
     # Guardrails: scorers should be finite and not constant
     # ----------------------------
-    # NOTE: Fail fast if a scorer degenerates or produces NaN/Inf (prevents silent artifacts).
+    # NOTE: Prevent silent artifact generation (e.g., AUROC on NaNs or constant scores).
     def _assert_not_constant(name: str, arr: np.ndarray) -> None:
         if not np.all(np.isfinite(arr)):
             n_bad = int(np.sum(~np.isfinite(arr)))
@@ -383,9 +406,10 @@ def main() -> None:
     # ----------------------------
     # Hidden features + OOF (centralized OOF)
     # ----------------------------
-    # NOTE: Adapter provides the minimal interface expected by hidden feature extraction.
+    # NOTE: Adapter provides the minimal attribute interface expected by hidden feature extraction.
     @dataclass
     class QAAdapter:
+        """Adapter matching build_hidden_feature_matrix() expected fields."""
         qid: str
         question: str
         model_answer: str
@@ -394,36 +418,36 @@ def main() -> None:
 
     feature_cfg = HiddenFeatureConfig(
         layers=cfg.hidden_layers,
-        pooling=cfg.hidden_pooling,
-        normalize=cfg.hidden_normalize,
+        pooling=cfg.hidden_pooling,  # NOTE: Pooling convention defines what token span becomes the feature vector.
+        normalize=cfg.hidden_normalize,  # NOTE: Normalization affects probe calibration; keep fixed for comparability.
     )
 
-    # NOTE: Extract hidden-state features once; keep_idx selects usable rows.
+    # NOTE: Extract hidden features once; kept_idx maps rows back to the original example order.
     X_hidden, kept_idx, hidden_meta = build_hidden_feature_matrix(qa_like, llm, feature_cfg=feature_cfg)
     kept_idx = np.asarray(kept_idx, dtype=int)
 
     if kept_idx.size == 0:
         raise RuntimeError("Hidden feature extraction kept 0 samples; cannot train hidden probe.")
 
-    y_hidden = y[kept_idx]
+    y_hidden = y[kept_idx]  # NOTE: Labels restricted to the subset with valid hidden features.
 
-    # NOTE: Out-of-fold probe to avoid leakage (each sample scored by a model not trained on it).
+    # NOTE: OOF avoids target leakage: each example is scored by a fold model that did not train on it.
     s_hidden_kept, hidden_folds = oof_logreg_scores(
         X_hidden,
         y_hidden,
         n_splits=cfg.n_splits,
-        seed=cfg.seed,
+        seed=cfg.seed,  # NOTE: Controls fold assignment and probe reproducibility.
     )
     hidden_auc = compute_auroc(y_hidden, s_hidden_kept)
 
     logger.info("Done: hidden-state probe (OOF logistic regression).")
 
-    # NOTE: Re-insert hidden probe outputs into full-length array (NaN for dropped rows).
+    # NOTE: Re-insert hidden scores into full length array; dropped rows remain NaN for explicit coverage tracking.
     s_hidden_full = np.full(len(y), np.nan, dtype=np.float64)
     s_hidden_full[kept_idx] = s_hidden_kept
 
     # EGH probe OOF (same centralized OOF function)
-    # NOTE: Probe trained on EGH feature matrix; output is the single reported EGH score.
+    # NOTE: Probe trained on EGH feature matrix; this is the single reported supervised EGH score.
     s_egh, egh_folds = oof_logreg_scores(
         X_egh,
         y,
@@ -433,7 +457,7 @@ def main() -> None:
     egh_auc = compute_auroc(y, s_egh)
 
     # Unsupervised AUROCs
-    # NOTE: These quantify the raw score signal without any supervised aggregation.
+    # NOTE: Raw-score AUROCs quantify signal without any learned aggregation/calibration.
     lntp_auc = compute_auroc(y, s_lntp_u_np)
     mtp_auc = compute_auroc(y, s_mtp_u_np)
 
@@ -448,7 +472,7 @@ def main() -> None:
     # ----------------------------
     # Bootstrap confidence intervals
     # ----------------------------
-    # NOTE: Stratified bootstrap for stable CI under class imbalance.
+    # NOTE: Stratified bootstrap stabilizes CI estimates under class imbalance.
     boot_cfg = BootstrapConfig(B=cfg.B, ci=cfg.ci, seed=cfg.seed, stratified=True)
 
     lntp_boot = bootstrap_auc(y, s_lntp_u_np, boot_cfg)
@@ -462,7 +486,7 @@ def main() -> None:
     egh_ce_boot = bootstrap_auc(y, s_egh_ce_np, boot_cfg)
     egh_entropy_boot = bootstrap_auc(y, s_egh_entropy_np, boot_cfg)
 
-    # NOTE: Delta vs. random baseline (score=0.5 constant) with stored bootstrap indices.
+    # NOTE: Delta vs random baseline (constant score=0.5); store resample indices for exact reproducibility.
     lntp_delta = bootstrap_auc_diff_with_indices(
         y, s_lntp_u_np, np.full_like(s_lntp_u_np, 0.5), boot_cfg, store_indices=True
     )
@@ -488,7 +512,7 @@ def main() -> None:
     # ----------------------------
     # Write per-sample output JSONL
     # ----------------------------
-    # NOTE: Per-example outputs support downstream plotting and auditing.
+    # NOTE: Per-example JSONL enables downstream plots/analysis without re-running model scoring.
     with cfg.output_jsonl.open("w", encoding="utf-8") as f:
         for i, ex in enumerate(examples):
             out = {
@@ -497,27 +521,27 @@ def main() -> None:
                 "model_answer": ex.model_answer,
                 "hallucinated": int(ex.label),
                 "scores": {
-                    "lntp_uncertainty": float(s_lntp_u_np[i]),
-                    "mtp_uncertainty": float(s_mtp_u_np[i]),
-                    "egh_probe_oof": float(s_egh[i]),
+                    "lntp_uncertainty": float(s_lntp_u_np[i]),  # NOTE: Higher = more uncertainty by convention.
+                    "mtp_uncertainty": float(s_mtp_u_np[i]),  # NOTE: Higher = more uncertainty by convention.
+                    "egh_probe_oof": float(s_egh[i]),  # NOTE: OOF supervised score; comparable across samples.
                     "egh_grad_norm": float(s_egh_grad_np[i]),
                     "egh_emb_diff": float(s_egh_emb_np[i]),
                     "egh_kl": float(s_egh_kl_np[i]),
                     "egh_ce": float(s_egh_ce_np[i]),
                     "egh_entropy": float(s_egh_entropy_np[i]),
-                    "hidden_probe_oof": None if not np.isfinite(s_hidden_full[i]) else float(s_hidden_full[i]),
+                    "hidden_probe_oof": None if not np.isfinite(s_hidden_full[i]) else float(s_hidden_full[i]),  # NOTE: None marks dropped rows.
                 },
-                "logit_stats": lntp_stats[i],
+                "logit_stats": lntp_stats[i],  # NOTE: Diagnostics for teacher-forcing span alignment/logprobs.
             }
             f.write(json.dumps(_jsonify(out), ensure_ascii=False) + "\n")
 
     # ----------------------------
     # Write manifest JSON
     # ----------------------------
-    # NOTE: Manifest stores protocol + versions + summary metrics for reproducibility.
+    # NOTE: Manifest is the single source of truth for protocol, environment, and summary metrics.
     kept_n = int(len(kept_idx))
     total_n = int(len(examples))
-    coverage = float(kept_n / total_n) if total_n > 0 else 0.0
+    coverage = float(kept_n / total_n) if total_n > 0 else 0.0  # NOTE: Hidden-feature availability rate.
 
     # Should-Fix A: capture runtime versions + key backend flags in manifest
     runtime: Dict[str, Any] = {
@@ -534,7 +558,7 @@ def main() -> None:
         except Exception:
             runtime["cuda_device_name"] = None
 
-        # SDPA backend flags (defensive: API may differ by torch version)
+        # NOTE: SDPA backend flags are informative only; APIs may differ by torch version.
         cuda_backends = getattr(torch.backends, "cuda", None)
         if cuda_backends is not None:
             for key, fn_name in (
@@ -613,7 +637,7 @@ def main() -> None:
             "kept_n": kept_n,
             "dropped_n": int(len(examples) - kept_n),
             "coverage": coverage,
-            "kept_idx": kept_idx.tolist(),
+            "kept_idx": kept_idx.tolist(),  # NOTE: Enables exact reconstruction of y_hidden alignment.
             "folds": hidden_folds,
             "meta": hidden_meta,
         },
@@ -629,4 +653,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()  # NOTE: CLI entry point.
+    main()  # NOTE: CLI entry point; all outputs are fully determined by CLI args + input JSONL.
