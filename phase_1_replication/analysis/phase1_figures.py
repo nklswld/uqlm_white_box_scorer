@@ -263,7 +263,7 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
     """
     Figure 1 — AUROC comparison (barh with bootstrap CI).
     """
-    fig, ax = plt.subplots(figsize=(7.5, 3.8))
+    fig, ax = plt.subplots(figsize=(7.0, 3.8))
 
     y_pos = np.arange(len(ci_df))
     ax.barh(
@@ -276,15 +276,18 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
         height=BAR_WIDTH,  # bars a bit slimmer
     )
 
-    # Value labels
+    # Value labels — place clearly ABOVE the CI line using a screen-space offset
     for i, val in enumerate(ci_df["AUROC"].values):
-        ax.text(
-            val + 0.005,
-            i,
+        ax.annotate(
             f"{val:.3f}",
-            va="center",
+            xy=(val + 0.005, i),
+            xytext=(0, 3),
+            textcoords="offset points",
             ha="left",
+            va="bottom",
             fontsize=int(mpl.rcParams["xtick.labelsize"] * 0.85),
+            zorder=5,
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),  # keeps it readable over the line
         )
 
     ax.set_yticks(y_pos)
@@ -298,19 +301,19 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.set_xlim(0.4, 0.8)
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
-    finalize_suptitle(fig, "Figure 1 — AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig1_auroc_bar_comparison.pdf")
     plt.close(fig)
 
 
 def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure 2 — AUROC with bootstrap 95% CI (interval plot).
+    AUROC with bootstrap 95% CI (interval plot).
     """
     order = ordered_subset(DEFAULT_ORDER, ci_df["Scorer"].tolist())
     ci_df_plot = ci_df.set_index("Scorer").loc[order].reset_index()
 
-    fig, ax = plt.subplots(figsize=(8.0, 4.2))
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
 
     ypos = np.arange(len(ci_df_plot))
     x = ci_df_plot["AUROC"].values
@@ -329,14 +332,14 @@ def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     ax.set_xlabel("AUROC (higher = better hallucination discrimination)")
     ax.set_ylabel("")
 
-    finalize_suptitle(fig, "Figure 2 — AUROC with Bootstrap 95% CI (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "AUROC with Bootstrap 95% CI (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig2_auroc_bootstrap_ci.pdf")
     plt.close(fig)
 
 
 def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure 3 — ROC overlay for selected scorers.
+    ROC overlay for selected scorers.
     """
     fig, ax = plt.subplots(figsize=(6.0, 5.0))
     y = df[LABEL_COL].values.astype(int)
@@ -357,14 +360,14 @@ def plot_fig3_roc_overlay(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("True Positive Rate")
     ax.legend(loc="lower right", frameon=False)
 
-    finalize_suptitle(fig, "Figure 3 — ROC Curves (Phase 1, TruthfulQA)", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "ROC Curves (Phase 1, TruthfulQA)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig3_roc_overlay.pdf")
     plt.close(fig)
 
 
 def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure 4 — Score distributions by hallucination label (boxplots).
+    Score distributions by hallucination label (boxplots).
     """
     # Long format
     long_df = df.melt(
@@ -386,7 +389,7 @@ def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
 
     long_df["hallucinated_str"] = long_df[LABEL_COL].map({0: "No (0)", 1: "Yes (1)"})
 
-    fig, ax = plt.subplots(figsize=(9.0, 4.5))
+    fig, ax = plt.subplots(figsize=(8.2, 4.5))
 
     pal = {"No (0)": "#4C72B0", "Yes (1)": "#DD8452"}
 
@@ -406,16 +409,23 @@ def plot_fig4_score_distributions(df: pd.DataFrame, outdir: Path) -> None:
     ax.tick_params(axis="x", labelrotation=20)
     for label in ax.get_xticklabels():
         label.set_ha("right")
-    ax.legend(title="Hallucinated", loc="upper right", frameon=False)
+    
+    ax.legend(
+        title="Hallucinated",
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0,
+        frameon=False,
+    )
 
-    finalize_suptitle(fig, "Figure 4 — Score Distributions by Hallucination Label", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "Score Distributions by Hallucination Label", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig4_score_distributions.pdf")
     plt.close(fig)
 
 
 def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure A — Overall score distributions (all examples, label-agnostic).
+    Overall score distributions (all examples, label-agnostic).
     """
     long_df = df.melt(
         id_vars=[LABEL_COL],
@@ -434,7 +444,7 @@ def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
     order = [short_name(s) for s in order_long]
     long_df["Scorer"] = pd.Categorical(long_df["Scorer"], categories=order, ordered=True)
 
-    fig, ax = plt.subplots(figsize=(10.0, 4.5))
+    fig, ax = plt.subplots(figsize=(7.8, 4.5))
     sns.boxplot(data=long_df, x="Scorer", y="Value", color="lightgray", ax=ax)
     ax.set_xlabel("")
     ax.set_ylabel("Score value")
@@ -442,14 +452,14 @@ def plot_figA_overall_distributions(df: pd.DataFrame, outdir: Path) -> None:
     for label in ax.get_xticklabels():
         label.set_ha("right")
 
-    finalize_suptitle(fig, "Figure A — Overall score distributions (all examples)", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "Overall score distributions (all examples)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figA_overall_score_distributions.pdf")
     plt.close(fig)
 
 
 def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
     """
-    Figure B — AUROC margin above random (ΔAUROC = AUROC − 0.5) with bootstrap CI.
+    AUROC margin above random (ΔAUROC = AUROC − 0.5) with bootstrap CI.
     """
     auroc = manifest["scores"]["auroc"]
     boot = manifest["scores"]["bootstrap"]
@@ -465,7 +475,7 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
 
     b_df = pd.DataFrame(rows).sort_values("delta", ascending=False).reset_index(drop=True)
 
-    fig, ax = plt.subplots(figsize=(10.0, 4.2))
+    fig, ax = plt.subplots(figsize=(7.8, 4.2))
     y = np.arange(len(b_df))
     x = b_df["delta"].values
     xerr = np.vstack([x - b_df["lo"].values, b_df["hi"].values - x])
@@ -478,14 +488,14 @@ def plot_figB_delta_auroc(manifest: dict, outdir: Path) -> None:
     ax.set_ylabel("")
     ax.invert_yaxis()
 
-    finalize_suptitle(fig, "Figure B — AUROC margin above random (ΔAUROC) with bootstrap 95% CI", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "AUROC margin above random (ΔAUROC) with bootstrap 95% CI", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figB_delta_auroc_vs_random.pdf")
     plt.close(fig)
 
 
 def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure C — Score overlap by label (density plots, 2x2 layout).
+    Score overlap by label (density plots, 2x2 layout).
     """
     panel_order = [
         "LNTP (hallucination score)",
@@ -495,7 +505,7 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
     ]
     panel_order = ordered_subset(panel_order, list(SCORE_COLS.keys()))
 
-    fig, axes = plt.subplots(2, 2, figsize=(9.0, 7.0), sharey=False)
+    fig, axes = plt.subplots(2, 2, figsize=(8.0, 6.2), sharey=False)
     axes = axes.flatten()
 
     for ax, name in zip(axes, panel_order):
@@ -518,9 +528,9 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
 
     # Suptitle + layout exakt einmal (keine Doppelung)
     fig.suptitle(
-        "Figure C — Score overlap by label (density plots)",
+        "Score overlap by label (density plots)",
         y=0.995,
-        fontsize=int(mpl.rcParams["figure.titlesize"] * 1.2),
+        fontsize=int(mpl.rcParams["figure.titlesize"] * 1.3),
     )
     fig.tight_layout(rect=[0, 0, 1, 0.965])
 
@@ -530,7 +540,7 @@ def plot_figC_score_overlap_density(df: pd.DataFrame, outdir: Path) -> None:
 
 def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure D — Spearman rank correlation between scorers.
+    Spearman rank correlation between scorers.
     """
     cols = {
         "LNTP": SCORE_COLS["LNTP (hallucination score)"],
@@ -546,14 +556,14 @@ def plot_figD_spearman_heatmap(df: pd.DataFrame, outdir: Path) -> None:
     fig, ax = plt.subplots(figsize=(6.0, 5.0))
     sns.heatmap(corr, annot=True, fmt=".2f", vmin=-1, vmax=1, square=True, cmap="coolwarm", ax=ax)
 
-    finalize_suptitle(fig, "Figure D — Spearman rank correlation between scorers", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "Spearman rank correlation between scorers", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figD_spearman_correlation_heatmap.pdf")
     plt.close(fig)
 
 
 def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
     """
-    Figure E — LNTP-low mismatches (low LNTP score vs Hidden-state probe).
+    LNTP-low mismatches (low LNTP score vs Hidden score).
     """
     x_col = SCORE_COLS["LNTP (hallucination score)"]
     y_col = SCORE_COLS["Hidden-state probe (OOF)"]
@@ -585,7 +595,7 @@ def plot_figE_lntp_low_mismatches(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("Hidden score")
     ax.legend(title="Hallucinated", labels=["No (0)", "Yes (1)"], frameon=False)
 
-    finalize_suptitle(fig, "Figure E — LNTP-low mismatches (low LNTP score vs Hidden-state probe)", y=0.97, top_rect=0.97)
+    finalize_suptitle(fig, "LNTP-low mismatches (low LNTP score vs Hidden-state probe)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "figE_lntp_low_mismatches_vs_hidden.pdf")
     plt.close(fig)
 
