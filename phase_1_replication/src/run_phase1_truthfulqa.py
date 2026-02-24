@@ -8,9 +8,8 @@ Deterministic given the provided seed and fixed inputs; GPU kernels/backends may
 minor nondeterminism depending on hardware/torch version despite determinism flags.
 """
 
-# src/run_phase1_truthfulqa.py
+# phase_1_replication/src/run_phase1_truthfulqa.py
 from __future__ import annotations  # NOTE: Forward refs for type hints; no runtime effect.
-
 import argparse  # NOTE: CLI defines the full experimental protocol (paths, model, seeds).
 import json  # NOTE: JSONL I/O + manifest serialization.
 import logging  # NOTE: Audit-friendly logs (progress + fatal errors).
@@ -21,7 +20,6 @@ import time  # NOTE: Timestamping output artifacts.
 from dataclasses import dataclass, asdict  # NOTE: Typed config/results serialization.
 from pathlib import Path  # NOTE: OS-independent path handling.
 from typing import Any, Dict, List, Tuple  # NOTE: Explicit types at API boundaries.
-
 import numpy as np  # NOTE: Numeric arrays + guardrail checks.
 
 

@@ -11,12 +11,10 @@ Determinism: feature extraction is deterministic given fixed model weights and
 tokenization; OOF training is deterministic given the fixed StratifiedKFold seed.
 """
 
-# src/scorers_hidden.py
+# phase_1_replication/src/scorers_hidden.py
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
-
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression

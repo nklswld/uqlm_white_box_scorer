@@ -1,3 +1,12 @@
+"""
+Analyze token-score length bias across ablation runs and generate appendix-ready figures/tables.
+Inputs: per-run `token_bias.manifest.json` plus `token_bias.results.jsonl` (or `results.jsonl` fallback),
+and optionally `k_sweep.manifest.json` or an embedded `answer_span_k_sweep` block in the token-bias manifest.
+Outputs: CSVs with AUROC + Spearman(length dependence) metrics and PDF plots (AUROC bars, Spearman bars, k-sweep lines).
+Direction handling: scores may be sign-flipped per metric to ensure AUROC >= 0.5 (reported via `direction`).
+Determinism: fully deterministic given fixed input files; no stochastic resampling/bootstrapping is used here.
+"""
+
 # phase_2_medical/analysis/ablations/analyze_token_score_bias.py
 import json
 from pathlib import Path
@@ -13,7 +22,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.5  # keep consistent with your other scripts
+FONT_SCALE = 1.5  # Global typographic scale; keep consistent across appendix figures.
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -49,6 +58,8 @@ VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 # ---------------------------------------------------------------------
 # Plot styling knobs (global, for print/readability)
 # ---------------------------------------------------------------------
+# NOTE: potential issue: ERRORBAR_* constants are defined for consistency with other scripts,
+# but no confidence intervals are plotted in this analysis (point estimates only).
 ERRORBAR_CAPSIZE = 4
 ERRORBAR_LINEWIDTH = 1.6
 ERRORBAR_CAPTHICK = 1.6
@@ -58,16 +69,17 @@ BASELINE_LINEWIDTH = 1.4
 # Robust save helper (Windows PDF file lock)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
+    """Save a PDF robustly by writing a temp file then atomically replacing the target (with retries)."""
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
 
-    # TEMP: gleiche Endung wie Ziel (pdf bleibt pdf)
+    # NOTE: potential issue: temp file is created next to the target; cross-filesystem moves are not supported.
     tmp = outpath.with_name(outpath.stem + ".__tmp__" + outpath.suffix)
 
-    # WICHTIG: format erzwingen, dann ist Endung egal
+    # Enforce PDF output regardless of suffix to avoid backend/format ambiguity.
     fig.savefig(tmp, format="pdf", **kwargs)
 
-    # Atomar ersetzen mit Retry (Windows locks)
+    # Atomically replace with retry to tolerate transient Windows file locks.
     for _ in range(15):
         try:
             tmp.replace(outpath)
@@ -75,7 +87,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
         except PermissionError:
             time.sleep(0.2)
 
-    # Fallback: versioniert
+    # Fallback: write versioned filename if the canonical output remains locked.
     stem, suffix = outpath.stem, outpath.suffix
     for k in range(2, 50):
         alt = outpath.with_name(f"{stem}_v{k}{suffix}")
@@ -92,10 +104,12 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # Helper: labels above bars (no CI)
 # ============================================================
 def add_value_labels(ax, x_positions, y_values, fmt="{:.3f}", fontsize=None):
+    """Annotate bar heights; silently skips missing/NaN values to avoid noisy figure failures."""
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
     for x, y in zip(x_positions, y_values):
+        # Skip invalid values to prevent rendering warnings and misleading labels.
         if y is None or (isinstance(y, float) and np.isnan(y)):
             continue
         ax.annotate(
@@ -114,10 +128,12 @@ def add_value_labels(ax, x_positions, y_values, fmt="{:.3f}", fontsize=None):
 # IO helpers
 # ============================================================
 def load_json(path: Path):
+    """Load a UTF-8 JSON file into a Python object."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def load_jsonl(path: Path):
+    """Load JSONL (one JSON object per non-empty line) into a list of dicts."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -131,17 +147,19 @@ def load_jsonl(path: Path):
 # Metrics helpers
 # ============================================================
 def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    """Compute AUROC and a sign (±1) that makes AUROC >= 0.5 via score inversion if needed."""
     y = np.asarray(y).reshape(-1)
     s = np.asarray(s).reshape(-1)
 
-    # Guard 1: AUROC undefined if only one class present
+    # Guard 1: AUROC undefined if only one class present (cannot rank positives vs negatives).
     if np.unique(y).size < 2:
         return np.nan, +1.0
 
-    # Guard 2: constant (or near-constant) scores -> AUROC not meaningful / may error in some cases
+    # Guard 2: near-constant scores imply no meaningful ranking (and may trigger metric edge cases).
     if float(np.nanstd(s)) < 1e-12:
         return np.nan, +1.0
 
+    # Convention: if AUROC < 0.5, flip scores so "higher is better" for downstream correlations/plots.
     au = roc_auc_score(y, s)
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
@@ -150,7 +168,7 @@ def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
 # ============================================================
 # Paths
 # ============================================================
-ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical
+ROOT = Path(__file__).resolve().parents[2]  # .../phase_2_medical (repo-local anchor; avoids CWD dependence)
 ABL_ROOT = ROOT / "outputs" / "ablations" / "token_score_bias"
 OUT_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "token_score_bias"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -172,6 +190,8 @@ if not ABL_ROOT.exists():
 # ============================================================
 token_bias_manifest_paths = sorted(ABL_ROOT.glob("**/token_bias.manifest.json"))
 k_sweep_manifest_paths = sorted(ABL_ROOT.glob("**/k_sweep.manifest.json"))
+# NOTE: potential issue: k_sweep_manifest_paths is currently not used directly; 
+# k-sweep files are resolved per run via ks_path below.
 
 if len(token_bias_manifest_paths) == 0:
     listing = sorted([str(p.relative_to(ABL_ROOT)) for p in ABL_ROOT.glob("**/*")][:250])
@@ -183,15 +203,16 @@ for tb_manifest_path in token_bias_manifest_paths:
     tb_dir = tb_manifest_path.parent
     results_path = tb_dir / "token_bias.results.jsonl"
     if not results_path.exists():
-        # fallback if user named it results.jsonl
+        # Convention fallback: allow a generic results filename for older runs.
         alt = tb_dir / "results.jsonl"
         if alt.exists():
             results_path = alt
         else:
+            # NOTE: potential issue: this silently drops an entire run from outputs if the results file is missing.
             print("[WARN] Missing token_bias.results.jsonl next to:", tb_manifest_path)
             continue
 
-    # try to find k_sweep.manifest.json in same dir
+    # Prefer a colocated k-sweep manifest if present; otherwise use the embedded block in token_bias.manifest.json.
     ks_path = tb_dir / "k_sweep.manifest.json"
     if not ks_path.exists():
         ks_path = None  # we can still use embedded answer_span_k_sweep from token_bias.manifest.json
@@ -215,22 +236,24 @@ for tb_manifest_path, results_path, ks_path in runs:
     tb_manifest = load_json(tb_manifest_path)
     rows = load_jsonl(results_path)
     if len(rows) == 0:
+        # Empty inputs would otherwise produce confusing NaNs/empty plots; skip with explicit warning.
         print("[WARN] Empty results:", results_path)
         continue
 
-    model_tag = tb_manifest_path.parent.name  # z.B. "mistral" (Ordner)
+    model_tag = tb_manifest_path.parent.name  # Run identifier derived from folder name (used in filenames and grouping).
     model_name = tb_manifest.get("model_name", model_tag)
 
-    # Load arrays
+    # Load arrays (row-order alignment is assumed across all extracted fields).
     y = np.asarray([int(r["label"]) for r in rows], dtype=int)
     ans_len = np.asarray([float(r["answer_len_tokens"]) for r in rows], dtype=float)
 
-    # Scores present in your example
+    # Scores expected by this script; update here if the logging schema changes.
     score_cols = ["lntp_mean", "lntp_sum", "mtp_mean", "mtp_sum"]
     for c in score_cols:
         if c not in rows[0]:
             raise KeyError(f"Missing required column '{c}' in results: {results_path}")
 
+    # Invariant: each score vector must have length n and match the label/length arrays by row index.
     S_raw = {c: np.asarray([float(r[c]) for r in rows], dtype=float) for c in score_cols}
 
     n = int(len(y))
@@ -238,9 +261,9 @@ for tb_manifest_path, results_path, ks_path in runs:
     # AUROC + Spearman (direction-corrected)
     for col, s_raw in S_raw.items():
         au, direction = auroc_with_best_direction(y, s_raw)
-        s = s_raw * direction
+        s = s_raw * direction  # Apply the same sign convention to length-dependence statistics.
 
-        # Spearman(score vs length) on direction-corrected scores
+        # Spearman(score vs length) on direction-corrected scores (ρ captures monotonic length bias).
         rho = pd.Series(s).corr(pd.Series(ans_len), method="spearman")
 
         records.append({
@@ -276,6 +299,7 @@ for tb_manifest_path, results_path, ks_path in runs:
         for k in k_list:
             kk = str(k)
             if kk not in ks_results:
+                # Skip missing k entries to tolerate partial sweeps without failing the full analysis.
                 continue
             r = ks_results[kk]
             k_sweep_records.append({
@@ -289,6 +313,7 @@ for tb_manifest_path, results_path, ks_path in runs:
                 "k_sweep_manifest": str(ks_path) if ks_path is not None else str(tb_manifest_path),
             })
     else:
+        # NOTE: potential issue: missing k-sweep data is not reflected in metrics CSV; only plot/console warns.
         print(f"[WARN] No k-sweep block found for run={model_tag} (neither k_sweep.manifest.json nor embedded).")
 
 
@@ -308,24 +333,25 @@ print("Wrote:", csv_k)
 # Plot 1: AUROC mean vs sum (LNTP/MTP) (no CI)
 # ============================================================
 def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
+    """Bar plot of AUROC across score variants for a single run (no uncertainty)."""
     order = ["lntp_mean", "lntp_sum", "mtp_mean", "mtp_sum"]
     sub = df_run.copy()
     sub["score"] = pd.Categorical(sub["score"], categories=order, ordered=True)
-    sub = sub.sort_values("score")
+    sub = sub.sort_values("score")  # Ensure stable category order independent of input CSV row order.
 
     x = np.arange(len(order), dtype=float)
     y = sub["auroc"].to_numpy(dtype=float)
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
     ax.bar(x, y, width=0.65)
-    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # AUROC chance baseline.
 
     ax.set_xticks(x)
     ax.set_xticklabels(order, rotation=15, ha="right")
     ax.set_ylabel("AUROC")
     ax.set_title(f"Token Score Bias — Length Normalization (AUROC) — {run_tag}")
 
-    # keep your dynamic ylim behavior
+    # Design choice: dynamic upper limit to keep resolution for high-performing runs while keeping a common floor.
     top = float(np.nanmax(y)) + 0.06  # vorher 0.02
     ax.set_ylim(0.45, max(0.70, top))
 
@@ -341,29 +367,30 @@ def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
 # Plot 2: Spearman(score vs length) mean vs sum (no CI)
 # ============================================================
 def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
+    """Bar plot of Spearman ρ between (direction-corrected) scores and answer length for a single run."""
     order = ["lntp_mean", "lntp_sum", "mtp_mean", "mtp_sum"]
     sub = df_run.copy()
     sub["score"] = pd.Categorical(sub["score"], categories=order, ordered=True)
-    sub = sub.sort_values("score")
+    sub = sub.sort_values("score")  # Stable ordering for across-run comparability.
 
     x = np.arange(len(order), dtype=float)
     y = sub["spearman_score_vs_len"].to_numpy(dtype=float)
 
     fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
     ax.bar(x, y, width=0.65)
-    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Zero indicates no monotonic length dependence.
 
     ax.set_xticks(x)
     ax.set_xticklabels(order, rotation=15, ha="right")
     ax.set_ylabel("Spearman ρ(score, answer length)")
     ax.set_title(f"Token Score Bias — Length Dependence (Spearman) — {run_tag}")
 
-    # keep your symmetric ylim behavior
+    # Symmetric y-limits emphasize direction (+/−) and prevent misleading visual scaling.
     m = float(np.nanmax(np.abs(np.r_[y, [0.0]])))
     ymin = -(m + 0.10)
     ymax =  (m + 0.10)
 
-    # extra headroom für Labels (z.B. +8% der Spannweite)
+    # Extra headroom so value labels do not clip at the top edge.
     headroom = 0.08 * (ymax - ymin)
     ax.set_ylim(ymin, ymax + headroom)
 
@@ -379,12 +406,13 @@ def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
 # Plot 3: k-sweep AUROC vs k (descriptive)
 # ============================================================
 def plot_k_sweep(dfk_run: pd.DataFrame, run_tag: str):
+    """Line plot of k-sweep AUROC (LNTP/MTP) for a single run; restricted to a small, interpretable k set."""
     sub = dfk_run.copy()
     if sub.empty:
         print(f"[WARN] No k-sweep data for run={run_tag}; skipping k-sweep plot.")
         return
 
-    # Restrict k for clarity (avoid overloading the figure)
+    # Restrict k for clarity (avoid overloading the figure); must match the discrete sweep values you want to report.
     K_KEEP = {1, 3, 5, 10, 20}
     sub = sub[sub["k"].isin(K_KEEP)].copy()
     sub = sub.sort_values("k")
@@ -395,17 +423,17 @@ def plot_k_sweep(dfk_run: pd.DataFrame, run_tag: str):
     fig, ax = plt.subplots(figsize=(10.5, 4.6), constrained_layout=True)
     ax.plot(k, lntp, marker="o", label="LNTP (AUROC)")
     ax.plot(k, mtp, marker="o", label="MTP (AUROC)")
-    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # AUROC chance baseline.
 
     ax.set_xlabel("Answer-span k (first k answer tokens)")
     ax.set_ylabel("AUROC (descriptive)")
     ax.set_title(f"Token Score Bias — Answer-span k-sweep (AUROC vs k) — {run_tag}")
     ax.set_xticks(k)
 
-    # Give vertical breathing room so text doesn't collide with axes/title
+    # Add vertical breathing room so value annotations do not collide with axes/title across backends.
     ax.margins(y=0.12)
 
-    # annotate values (offset in points -> stable spacing)
+    # Annotate per-point values (offset in points -> stable spacing across DPI/export backends).
     for kk, vv in zip(k, lntp):
         ax.annotate(
             f"{vv:.3f}", (kk, vv),
@@ -440,6 +468,7 @@ if df.empty:
     raise RuntimeError("No metrics computed; check token_bias.results.jsonl parsing.")
 
 for run_tag in sorted(df["run"].unique().tolist()):
+    # Invariant: df is grouped by folder-derived run_tag; figures are emitted per run for appendix organization.
     df_run = df[df["run"] == run_tag].copy()
     plot_auroc_mean_vs_sum(df_run, run_tag)
     plot_spearman_vs_len(df_run, run_tag)
@@ -452,12 +481,16 @@ for run_tag in sorted(df["run"].unique().tolist()):
 # Write a minimal summary CSV (appendix mention)
 # ============================================================
 def summarize(df: pd.DataFrame):
-    # For each run: report AUROC(mean) vs AUROC(sum) and their delta
+    """Summarize mean vs sum AUROC per run for quick appendix reporting (including deltas)."""
+    # For each run: report AUROC(mean) vs AUROC(sum) and their delta.
     out = []
     for run_tag in sorted(df["run"].unique()):
+        # NOTE: potential issue: duplicate rows per (run, score) would make .loc ambiguous and may raise/return a Series.
+        # Assumes exactly one row per (run, score); duplicates would make .loc ambiguous.
         sub = df[df["run"] == run_tag].set_index("score")
 
         def get_val(score):
+            # Assumes each score is present exactly once per run; missing keys will raise (preferred over silent NaN).
             r = sub.loc[score]
             return float(r["auroc"])
 

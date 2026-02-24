@@ -7,13 +7,11 @@ Design contract: encode_qa_batch produces padding-agnostic answer_start_idx in p
 Reproducibility: deterministic given fixed model weights/config and identical tokenizer settings; no stochastic sampling here.
 """
 
-# modeling_llm.py
+# phase_1_replication/src/modeling_llm.py
 
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 

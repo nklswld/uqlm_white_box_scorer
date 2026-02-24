@@ -1,14 +1,14 @@
-"""Phase 2 table generation for medical error-detection metrics.
+"""Phase 2 table generation and metric summarization for medical error detection.
 
-Reads aggregated Phase 2 metrics (bootstrap mean and 95% CI bounds) from CSV files
-and emits publication-ready wide tables for per-task comparisons and appendix-style
-combined-task views (per scorer).
-Inputs: metrics CSVs under outputs/final (AUROC and Spearman rho summaries).
-Outputs: CSV tables under outputs/tables/tables_general and outputs/tables/tables_general appendix.
-Determinism: deterministic given fixed CSV contents; no randomness or sampling here.
+This module (i) aggregates per-run bootstrap summaries (AUROC and Spearman rho) and
+(ii) renders publication-ready wide CSV tables for per-task and appendix views.
+Inputs: per-run artifacts in outputs/final (*.manifest.json, *.results.jsonl, *.npz) and/or
+precomputed metric CSVs in outputs/figures_tables/tables_general.
+Outputs: wide-format table CSVs in outputs/figures_tables/tables_general (+ appendix/).
+Determinism: fully deterministic given fixed input files; bootstrap resamples are read from disk.
 """
 
-# phase_2_medical/analysis/phase2_tables.py 
+# phase_2_medical/analysis/phase2_tables.py
 import pandas as pd
 from pathlib import Path
 import numpy as np
@@ -19,9 +19,9 @@ from sklearn.metrics import roc_auc_score
 # ----------------------------
 # Paths
 # ----------------------------
-# Base directory for upstream Phase 2 metric summaries (produced elsewhere).
+# Base directory for upstream Phase 2 per-run artifacts (produced elsewhere).
 BASE = (Path(__file__).resolve().parents[1] / "outputs" / "final")
-# Output directory for generated table CSVs.
+# Output directory for generated metric CSVs and wide tables.
 OUT_DIR = (Path(__file__).resolve().parents[1] / "outputs" / "figures_tables" / "tables_general")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -68,10 +68,10 @@ DIGITS = 2
 # Helpers
 # ----------------------------
 def mean_ci_str(mean: float, lo: float, hi: float, digits: int = 3) -> str:
-    """Return a compact 'mean ± halfwidth' CI string; missing values render as em dash."""
+    """Format as 'mean ± halfwidth'; returns '—' if any input is NaN."""
     if any(pd.isna(x) for x in [mean, lo, hi]):
         return "—"
-    # CI is provided as [lo, hi]; we report half-width to match manuscript convention.
+    # CI input is [lo, hi]; manuscript convention reports half-width (hi-lo)/2.
     pm = (hi - lo) / 2.0
     return f"{mean:.{digits}f} ± {pm:.{digits}f}"
 
@@ -82,11 +82,13 @@ def _get_row(
     score: str,
     prefer_col: str | None = None,
 ) -> pd.Series | None:
+    """Select the unique row for (task, model, score); break ties by prefer_col if provided."""
     r = df[(df["task"] == task) & (df["model"] == model) & (df["score"] == score)]
     if len(r) == 0:
         return None
 
     if len(r) > 1 and prefer_col is not None:
+        # NOTE: potential issue: duplicates indicate upstream aggregation problems; we pick deterministically.
         print(f"[WARN] Duplicate rows for ({task},{model},{score}) -> taking max {prefer_col}")
 
     # If duplicates exist, pick deterministically (best by prefer_col).
@@ -101,20 +103,17 @@ def build_wide_table(
     task: str,
     digits: int = 3,
 ) -> pd.DataFrame:
-    """
-    Build a per-task wide table with scorers as rows and models as columns.
-    Cells are formatted as 'mean ± CI half-width' (or '—' if missing).
-    """
+    """Render a per-task table: scorers as rows, models as columns, cells formatted via mean_ci_str()."""
     mean_col, lo_col, hi_col = value_cols
 
     rows = []
     for score in SCORER_ORDER:
         row = {"Scorer": SCORER_PRETTY.get(score, score)}
         for model in MODEL_ORDER:
-            # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
+            # Alignment invariant: each cell corresponds to exactly one (task, model, score) triple.
             r = _get_row(df, task, model, score, prefer_col=mean_col)
             if r is None:
-                # Missing combinations are rendered explicitly to avoid silent table shape changes.
+                # Explicit placeholder keeps table shape stable across runs/tasks.
                 row[MODEL_PRETTY[model]] = "—"
             else:
                 row[MODEL_PRETTY[model]] = mean_ci_str(
@@ -131,7 +130,7 @@ def build_wide_table(
 
 # Optional out_dir so combined tables can be routed to the appendix subdirectory.
 def save_table_bundle(wide: pd.DataFrame, name: str, caption: str, label: str, out_dir: Path = OUT_DIR):
-    """Write a single CSV table to disk (LaTeX assets handled elsewhere)."""
+    """Persist a single wide table as CSV; LaTeX wrapping/metadata is handled elsewhere."""
     csv_path = out_dir / f"{name}.csv"
     wide.to_csv(csv_path, index=False)
 
@@ -145,17 +144,14 @@ def build_all_task_table_per_scorer(
     score: str,
     digits: int = 3,
 ) -> pd.DataFrame:
-    """
-    Build a per-scorer wide table with tasks as rows and models as columns.
-    Intended for appendix: highlights cross-task differences for a fixed scoring method.
-    """
+    """Render an appendix table: tasks as rows, models as columns, for a fixed scorer."""
     mean_col, lo_col, hi_col = value_cols
 
     rows = []
     for task in TASK_ORDER:
         row = {"Task": TASK_PRETTY.get(task, task)}
         for model in MODEL_ORDER:
-            # Alignment invariant: one cell corresponds to a unique (task, model, score) triple.
+            # Alignment invariant: each cell corresponds to exactly one (task, model, score) triple.
             r = _get_row(df, task, model, score, prefer_col=mean_col)
             if r is None:
                 row[MODEL_PRETTY[model]] = "—"
@@ -175,9 +171,11 @@ def build_all_task_table_per_scorer(
 # ----------------------------
 # Metric CSV generation (moved from phase2_figures.py)
 # ----------------------------
+# Scores explicitly supported for Phase 2 reporting; other numeric fields are ignored.
 MAIN_SCORES = {"lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"}
 
 def load_jsonl(path: Path):
+    """Load a JSONL file into a list of dicts; blank lines are skipped."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -187,36 +185,44 @@ def load_jsonl(path: Path):
     return rows
 
 def load_bootstrap_map(npz_path: Path):
+    """Load bootstrap resample indices from .npz, normalizing common key aliases to 'indices'."""
     z = np.load(npz_path, allow_pickle=True)
     out = {}
     for k in z.files:
         arr = z[k]
+        # Some writers store a list/array of arrays (dtype=object); stack to (B, N).
         if isinstance(arr, np.ndarray) and arr.dtype == object:
             arr = np.stack(arr, axis=0)
         if isinstance(arr, np.ndarray):
             out[str(k).lower()] = arr.astype(int)
 
+    # Accept multiple naming conventions for the main bootstrap index matrix.
     for alias in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if alias in out and "indices" not in out:
             out["indices"] = out[alias]
 
+    # Heuristic: if a single array exists, treat it as the indices matrix.
     if "indices" not in out and len(out) == 1:
         out["indices"] = next(iter(out.values()))
 
     return out
 
 def find_label_key(example: dict):
+    """Infer the binary label field name from a single example row."""
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
             return k
+    # Fail fast: downstream metrics require a binary label vector.
     raise KeyError("No label key found (expected is_error/label/y/target/error).")
 
 def extract_scores(example: dict):
+    """Extract per-scorer numeric scores from a row, supporting both nested and flat conventions."""
     if "scores" in example and isinstance(example["scores"], dict):
         return example["scores"]
     if "wb_scores" in example and isinstance(example["wb_scores"], dict):
         return example["wb_scores"]
 
+    # Fallback: scan numeric fields and keep those whose key contains a known scorer token.
     scores = {}
     for k, v in example.items():
         if isinstance(v, (float, int)):
@@ -226,26 +232,31 @@ def extract_scores(example: dict):
     return scores
 
 def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
+    """Compute AUROC and flip score sign if needed so AUROC >= 0.5; returns (auroc, direction)."""
     # AUROC undefined if only one class is present
     if np.min(y) == np.max(y):
         return np.nan, +1.0
 
     au = roc_auc_score(y, s)
+    # Convention: direction indicates the sign applied to raw scores before reporting/bootstrapping.
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
     return au, +1.0
 
 def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap mean and two-sided (1-alpha) quantile CI from explicit resample indices."""
     aucs = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Skip degenerate resamples (single-class); affects effective bootstrap size.
         if yy.min() == yy.max():
             continue
         aucs.append(roc_auc_score(yy, ss))
 
     aucs = np.asarray(aucs, dtype=float)
     if aucs.size == 0:
+        # All resamples degenerate -> no meaningful CI; caller renders as missing.
         return np.nan, np.nan, np.nan
 
     mean = float(np.mean(aucs))
@@ -254,10 +265,12 @@ def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray
     return mean, lo, hi
 
 def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
+    """Bootstrap mean and two-sided (1-alpha) quantile CI for Spearman rho from resample indices."""
     rhos = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Skip degenerate resamples (single-class); Spearman may be undefined/unstable.
         if yy.min() == yy.max():
             continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
@@ -267,6 +280,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 
     rhos = np.asarray(rhos, dtype=float)
     if rhos.size == 0:
+        # All resamples degenerate/NaN -> no meaningful CI; caller renders as missing.
         return np.nan, np.nan, np.nan
 
     mean = float(np.mean(rhos))
@@ -275,19 +289,20 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
     return mean, lo, hi
 
 def infer_task_model_from_manifest(manifest_path: Path):
+    """Infer task and coarse model family from the run manifest JSON."""
     m = json.loads(manifest_path.read_text(encoding="utf-8"))
     task = str(m.get("task", "")).lower()
     config = m.get("config", {})
     model_name = str(config.get("model_name", "")).lower()
+    # Heuristic: any model_name containing "bio" maps to the BioMistral family label.
     model = "biomistral" if "bio" in model_name else "mistral"
     return task, model
 
 def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
     """
-    Writes ONLY:
+    Generate Phase 2 metric summaries from per-run artifacts and write:
       - phase2_metrics_auroc_ci.csv
       - phase2_metrics_spearman_rho.csv
-    (no filtered CSVs)
     """
     final_dir = Path(final_dir)
     out_dir = Path(out_dir)
@@ -336,19 +351,24 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
     for task, model, results_path, manifest_path, boot_path in runs:
         rows = load_jsonl(results_path)
         if not rows:
+            # No examples -> no metrics; skip run without failing the entire batch.
             continue
 
+        # Label extraction convention is inferred from the first row and applied uniformly.
         y_key = find_label_key(rows[0])
         y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
+        # Score extraction supports nested dicts and flat numeric fields; keys normalized to lowercase.
         score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
 
+        # Intersection enforces per-example completeness: only scorers present in all rows are kept.
         keys = set(score_dicts[0].keys())
         for d in score_dicts[1:]:
             keys &= set(d.keys())
         keys = sorted(keys)
 
         S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
+        # Only report the configured main scores to keep tables comparable across runs.
         S = {k: v for k, v in S.items() if k in MAIN_SCORES}
 
         boot_map = load_bootstrap_map(boot_path)
@@ -359,24 +379,30 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
             boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
             boot_idx = boot_map.get(boot_key, None)
             if boot_idx is None:
+                # Fallback: use shared bootstrap indices if scorer-specific indices are absent.
                 boot_idx = boot_map.get("indices", None)
                 
             if boot_idx is None:
+                # Without explicit resamples, results are non-reproducible; skip rather than improvise.
                 print(f"[WARN] No bootstrap indices for score={score_l} in {boot_path.name}; skipping.")
                 continue
 
+            # Determine sign convention from AUROC on the relevant subset, then apply consistently.
             if score_l == "hidden_probe_oof" and hidden_kept is not None:
                 au, direction = auroc_with_best_direction(y[hidden_kept], s_raw[hidden_kept])
             else:
                 au, direction = auroc_with_best_direction(y, s_raw)
 
             if np.isnan(au):
+                # Single-class label vector makes AUROC undefined; skip to avoid misleading summaries.
                 print(f"[WARN] AUROC undefined (single-class y) for task={task}, model={model}, score={score_l}. Skipping.")
                 continue
 
+            # Apply direction so that higher scores correspond to the "positive" label for reporting.
             s = s_raw * direction
 
             if score_l == "hidden_probe_oof":
+                # Hidden probe may include NaNs or a curated subset; both affect N and bootstrap alignment.
                 if hidden_kept is None:
                     m = np.isfinite(s)
                     y_use = y[m]
@@ -388,6 +414,7 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
                 y_use = y
                 s_use = s
 
+            # Guardrail: bootstrap index length must match the exact vector used for metrics.
             if boot_idx.shape[1] != len(y_use):
                 raise ValueError(
                     f"Bootstrap shape mismatch for {score_l}: boot_idx {boot_idx.shape} vs N={len(y_use)} "
@@ -396,6 +423,7 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
 
             mean_b, lo, hi = bootstrap_ci_from_indices(y_use, s_use, boot_idx, alpha=0.05)
 
+            # Spearman rho is computed against the binary label (rank correlation with error indicator).
             rho = pd.Series(s_use).corr(pd.Series(y_use), method="spearman")
             spearman_records.append({
                 "task": task,
@@ -446,6 +474,7 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
 
     df_spear_main = pd.DataFrame(spearman_records)
     df_spear_ci = pd.DataFrame(spearman_ci_rows)
+    # Left-join preserves per-run rows even if CI computation returned NaNs.
     df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], how="left")
 
     out_sp = out_dir / "phase2_metrics_spearman_rho.csv"
@@ -458,8 +487,9 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
 # Main
 # ----------------------------
 def main():
-    """Generate per-task and appendix combined-task tables for AUROC and Spearman rho."""
+    """Generate metric CSVs (if missing) and emit per-task + appendix wide tables."""
     
+    # Primary control: prefer existing metric CSVs; regenerate only when absent.
     if not AUROC_CSV.exists() or not SPEAR_CSV.exists():
         generate_phase2_metric_csvs(final_dir=BASE, out_dir=OUT_DIR)
     else:
@@ -469,6 +499,7 @@ def main():
         raise FileNotFoundError(f"Missing AUROC CSV: {AUROC_CSV}")
     df_au = pd.read_csv(AUROC_CSV)
     
+    # Canonicalize join keys to lowercase for stable matching against configured orders.
     for k in ["task", "model", "score"]:
         df_au[k] = df_au[k].astype(str).str.lower()
     
@@ -477,6 +508,7 @@ def main():
         if "auroc_boot_mean" in df_au.columns:
             df_au = df_au.rename(columns={"auroc_boot_mean": "boot_mean"})
         elif "auroc" in df_au.columns:
+            # NOTE: potential issue: using point AUROC as bootstrap mean changes interpretation of '±' cells.
             # fallback: use point estimate as "boot_mean" if bootstrap mean is not available
             df_au["boot_mean"] = df_au["auroc"]
 
@@ -489,6 +521,7 @@ def main():
     if not SPEAR_CSV.exists():
         raise FileNotFoundError(f"Missing Spearman CSV: {SPEAR_CSV}")
     df_sp = pd.read_csv(SPEAR_CSV)
+    # Canonicalize join keys to lowercase for stable matching against configured orders.
     for k in ["task", "model", "score"]:
         df_sp[k] = df_sp[k].astype(str).str.lower()
 

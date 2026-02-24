@@ -6,12 +6,10 @@ Implements stratified resampling (within-class) by default to keep class counts 
 Determinism: all sampling is driven by `BootstrapConfig.seed` via NumPy's Generator for reproducibility.
 """
 
-# src/bootstrap.py
+# phase_1_replication/src/bootstrap.py
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Optional, Tuple
-
 import numpy as np
 from sklearn.metrics import roc_auc_score
 

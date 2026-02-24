@@ -6,18 +6,16 @@ Alignment is enforced by the provided qid list; missing labels raise errors to a
 Determinism: bootstrap CI is reproducible via a fixed RNG seed; all other computations are deterministic given inputs.
 """
 
-# src/self_iaa_compute.py
+# phase_1_replication/src/self_iaa_compute.py
 # Self-IAA: Round 1 vs Round 2 (same annotator, blinded re-annotation).
 # Uses a frozen qid list for exact alignment; fails fast on missing labels.
 # NOTE: potential issue: assumes binary labels encoded exactly as {0,1}.
-# TODO: verify: label semantics for "hallucinated" are consistent across R1 and R2 sources.
+# NOTE: ensure that the label semantics for "hallucinated" are identical across R1 and R2 sources.
 
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
-
 import numpy as np
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
 

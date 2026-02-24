@@ -2,9 +2,9 @@
 Analyze hidden-layer probe ablations and generate publication-ready summary figures.
 
 Inputs: per-run *.manifest.json (task/model metadata), matching *.results.jsonl (per-example labels/scores),
-and matching *.manifest.bootstrap_indices.npz (bootstrap resampling indices).
+and matching *.manifest.bootstrap_indices.npz (bootstrap resampling indices and (optionally) kept-example masks).
 Outputs: a CSV of per-(task, model, layer) metrics with 95% bootstrap CIs, plus PDF figures (overlays + 2x2 matrices).
-Reproducibility: metrics and CIs are deterministic given fixed bootstrap indices saved per run (no RNG used here).
+Reproducibility: all estimates are deterministic given saved bootstrap indices; no RNG is used in this script.
 """
 
 # phase_2_medical/analysis/ablations/analyze_hidden_layers.py
@@ -40,7 +40,7 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
-    # Slightly thicker axes/ticks for print/PDF legibility
+    # Slightly thicker axes/ticks for print/PDF legibility.
     "axes.linewidth": 1.2,
     "xtick.major.width": 1.1,
     "ytick.major.width": 1.1,
@@ -66,7 +66,7 @@ ABL_DIR = ROOT / "outputs" / "ablations" / "hidden_layers"
 FIGS_DIR = ROOT / "outputs" / "figures_tables" / "ablations" / "hidden_layers"
 FIGS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Where to store the summary CSV for this ablation (single consolidated artifact for downstream analysis).
+# Single consolidated table for downstream aggregation / plotting (one row per task×model×layer).
 OUT_CSV = FIGS_DIR / "analysis_hidden_layers_metrics.csv"
 ABL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -88,7 +88,7 @@ BASELINE_LINEWIDTH = 1.4
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 
-# Hidden-layer sweep convention: score key is typically stored under this name across runs.
+# Hidden-layer sweep convention: score key used across runs for the probe's per-example output.
 PRIMARY_SCORE_KEY = "hidden_probe_oof"
 
 
@@ -96,7 +96,7 @@ PRIMARY_SCORE_KEY = "hidden_probe_oof"
 # Robust save helper (Windows PDF file locks)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
-    """Save a figure to PDF; if the target file is locked, write to a versioned *_vK.pdf alternative."""
+    """Save figure to PDF; if outpath is locked, fall back to a versioned *_vK.pdf filename."""
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,7 +104,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
         fig.savefig(outpath, **kwargs)
         return outpath
     except PermissionError:
-        # NOTE: potential issue: silently writing *_vK.pdf may surprise callers expecting a fixed filename.
+        # NOTE: potential issue: writing *_vK.pdf changes the artifact name expected by downstream scripts.
         stem = outpath.stem
         suffix = outpath.suffix
         for k in range(2, 50):
@@ -122,7 +122,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # Helpers
 # ============================================================
 def load_jsonl(path: Path):
-    """Load JSONL into a list of dicts; skips blank lines."""
+    """Load JSONL file into a list of dicts; ignores blank lines to tolerate trailing newlines."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -133,7 +133,9 @@ def load_jsonl(path: Path):
 
 def np_load_array_by_preference(npz_path: Path, preferred_keys=None):
     """
-    Load an array from NPZ by preferred key order; fallback to common conventions; else first array.
+    Load a single array from NPZ using a preferred key order, then common conventions, else first entry.
+
+    NOTE: potential issue: "first entry" fallback depends on NPZ key ordering and may vary across writers.
     """
     z = np.load(npz_path, allow_pickle=True)
     preferred_keys = list(preferred_keys or [])
@@ -146,14 +148,16 @@ def np_load_array_by_preference(npz_path: Path, preferred_keys=None):
     return z[z.files[0]]
 
 def load_bootstrap_indices(boot_path: Path, preferred_keys=None):
-    """Load bootstrap index matrix as int array of shape [B, N]."""
+    """Load bootstrap resample indices as int array with shape [B, N] (B resamples over N examples)."""
     arr = np_load_array_by_preference(boot_path, preferred_keys=preferred_keys)
+    # Some pipelines save an object array of per-resample index vectors; stack to [B, N].
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
 
 def find_label_key(example: dict):
-    """Heuristically locate the binary label field in a result row."""
+    """Heuristically locate the binary label field in a result row (first match wins)."""
+    # Convention across pipelines: label may be stored under any of these common keys.
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
             return k
@@ -161,14 +165,14 @@ def find_label_key(example: dict):
 
 
 def extract_scores(example: dict):
-    """Extract score dictionary from a row; falls back to numeric 'hidden*' fields if nested dicts are absent."""
-    # Convention: some pipelines store scores under nested dicts to avoid key collisions.
+    """Extract a score dict from a row; fall back to scalar numeric 'hidden*' fields if needed."""
+    # Convention: nested score dicts reduce key collisions with other per-example metadata.
     if "scores" in example and isinstance(example["scores"], dict):
         return example["scores"]
     if "wb_scores" in example and isinstance(example["wb_scores"], dict):
         return example["wb_scores"]
 
-    # Fallback: harvest scalar numeric fields whose names indicate hidden-layer probe outputs.
+    # Fallback: collect scalar numeric fields with names indicating hidden-layer probe outputs.
     scores = {}
     for k, v in example.items():
         if isinstance(v, (float, int)):
@@ -179,27 +183,29 @@ def extract_scores(example: dict):
 
 
 def infer_task_model_from_manifest(manifest_path: Path):
-    """Infer (task, model) from a run manifest, using a BioMistral substring convention."""
+    """Infer (task, model) from manifest.json; model uses a 'bio' substring convention."""
     m = json.loads(manifest_path.read_text(encoding="utf-8"))
     task = str(m.get("task", "")).lower()
     config = m.get("config", {})
     model_name = str(config.get("model_name", "")).lower()
-    # Heuristic: "bio" in model name selects biomistral vs mistral.
+    # Heuristic: "bio" in the model name selects biomistral vs mistral.
     model = "biomistral" if "bio" in model_name else "mistral"
     return task, model
 
 
 def infer_layer(manifest_path: Path):
     """
-    Infer hidden layer index from (1) folder naming or (2) manifest config keys, with filename fallback.
+    Infer hidden layer index via (1) path convention, else (2) manifest config, else filename fallback.
+
+    NOTE: potential issue: conflicting signals (e.g., folder vs config) are not checked for consistency.
     """
-    # (1) path-based inference (preferred: explicit layer_* folder names are unambiguous)
+    # (1) Path-based inference (preferred: explicit layer_* folder names are unambiguous).
     for part in manifest_path.parts[::-1]:
         m = re.match(r"layer[_\-]?(\d+)", str(part).lower())
         if m:
             return int(m.group(1))
 
-    # (2) manifest-based inference (supports alternative config schemas across experiments)
+    # (2) Manifest-based inference (supports alternative config schemas across experiments).
     mjson = json.loads(manifest_path.read_text(encoding="utf-8"))
     cfg = mjson.get("config", {})
     for k in ["hidden_layer", "hidden_layer_idx", "layer", "layer_idx"]:
@@ -210,7 +216,7 @@ def infer_layer(manifest_path: Path):
                 # NOTE: potential issue: non-integer layer values are ignored, potentially masking misconfigured runs.
                 pass
 
-    # fallback: try parse digits anywhere in filename
+    # Fallback: try parse digits anywhere in filename.
     m = re.search(r"layer[_\-]?(\d+)", manifest_path.name.lower())
     if m:
         return int(m.group(1))
@@ -230,7 +236,8 @@ def auroc_with_best_direction(y: np.ndarray, s: np.ndarray):
 def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
     """
     Bootstrap AUROC mean and central (1-alpha) CI using precomputed resample indices.
-    TODO: verify: whether skipping single-class resamples biases CI width for highly imbalanced tasks.
+
+    NOTE: skipping single-class resamples may affect CI width under strong class imbalance and should be considered when interpreting results.
     """
     aucs = []
     for idx in boot_idx:
@@ -242,6 +249,7 @@ def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray
         aucs.append(roc_auc_score(yy, ss))
     aucs = np.asarray(aucs, dtype=float)
     if aucs.size == 0:
+        # All resamples degenerate -> CI undefined; propagate NaNs into summary tables/figures.
         return np.nan, np.nan, np.nan
     mean = float(np.mean(aucs))
     lo = float(np.quantile(aucs, alpha / 2))
@@ -252,6 +260,7 @@ def bootstrap_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray
 def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: np.ndarray, alpha=0.05):
     """
     Bootstrap Spearman rho mean and central (1-alpha) CI using precomputed resample indices.
+
     NOTE: potential issue: Spearman on binary y reduces to rank-biserial-like behavior; interpret accordingly.
     """
     rhos = []
@@ -262,6 +271,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
         if yy.min() == yy.max():
             continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
+        # Some resamples can yield NaN (e.g., ties/constant ranks); skip to avoid contaminating quantiles.
         if pd.isna(rho):
             continue
         rhos.append(float(rho))
@@ -276,7 +286,7 @@ def bootstrap_spearman_ci_from_indices(y: np.ndarray, s: np.ndarray, boot_idx: n
 
 def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
                              fmt="{:.3f}", fontsize=None, pad_frac=0.02):
-    """Annotate points/bars with numeric labels placed above the upper CI whisker."""
+    """Annotate plotted estimates with numeric labels placed above the upper CI whisker."""
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
@@ -285,6 +295,7 @@ def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
     pad = pad_frac * span
 
     for x, y, eh in zip(x_positions, y_values, yerr_high):
+        # Skip missing points (propagates through NaN-based masking upstream).
         if y is None or (isinstance(y, float) and np.isnan(y)):
             continue
         top = y + (0.0 if eh is None else float(eh))
@@ -311,7 +322,7 @@ for manifest_path in sorted(ABL_DIR.rglob("*.manifest.json")):
     results_path = manifest_path.with_suffix("").with_suffix(".results.jsonl")
     boot_path = manifest_path.with_suffix("").with_suffix(".manifest.bootstrap_indices.npz")
 
-    # We skip incomplete runs because they would otherwise silently bias layer coverage in summary figures.
+    # Skip incomplete runs (prevents silent layer-coverage bias in summary tables/figures).
     if not results_path.exists():
         print("[WARN] Missing results for", manifest_path, "expected:", results_path.name)
         continue
@@ -338,6 +349,7 @@ for task, model, layer, results_path, manifest_path, boot_path in runs:
         # Empty results contribute no statistics; keep quiet to avoid noisy logs across large sweeps.
         continue
 
+    # Label-key is inferred from the first row; assumes schema is consistent within a run.
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
@@ -356,26 +368,29 @@ for task, model, layer, results_path, manifest_path, boot_path in runs:
     # --- Use kept subset if available in NPZ (preferred, matches how hidden bootstraps were generated) ---
     z = np.load(boot_path, allow_pickle=True)
     if "hidden_kept_indices" in z.files and "hidden" in z.files:
+        # Invariant: kept indices define the exact evaluation set used when precomputing bootstrap indices.
         kept = z["hidden_kept_indices"].astype(int)
         s_raw = s_full[kept]
         y_use = y[kept]
         boot_idx = load_bootstrap_indices(boot_path, preferred_keys=["hidden"])
     else:
-        # Fallback: infer kept via finite mask (less ideal, but still deterministic)
+        # Fallback: infer kept via finite mask (less ideal, but still deterministic).
+        # NOTE: potential issue: mask-derived "kept" may not match the set used to generate boot_idx in older runs.
         mask = np.isfinite(s_full)
         s_raw = s_full[mask]
         y_use = y[mask]
         boot_idx = load_bootstrap_indices(boot_path)  # last resort fallback
 
-    # Guard: if everything got dropped, skip this run
+    # Guard: if everything got dropped, skip this run.
     if y_use.size == 0 or np.unique(y_use).size < 2:
         print(f"[WARN] Hidden score empty/degenerate after masking for {results_path.name}")
         continue
 
-    # Polarity convention on the actually-used subset
+    # Polarity convention is estimated on the actually-used subset, then applied consistently for all metrics.
     au, direction = auroc_with_best_direction(y_use, s_raw)
     s = s_raw * direction
 
+    # CIs are computed from saved bootstrap indices (deterministic; no RNG).
     au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
     rho_mean, rho_lo, rho_hi = bootstrap_spearman_ci_from_indices(y_use, s, boot_idx, alpha=0.05)
 
@@ -416,7 +431,7 @@ def _plot_line_ci(ax, x, y, lo, hi, label):
     """Plot point estimates with shaded CI band and high-contrast error bars."""
     ax.plot(x, y, marker="o", label=label)
     ax.fill_between(x, lo, hi, alpha=0.15)
-    # errorbars in black for contrast
+    # Error bars are drawn in black to remain legible across styles/exports.
     yerr_low = y - lo
     yerr_high = hi - y
     ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", 
@@ -426,6 +441,8 @@ def _plot_line_ci(ax, x, y, lo, hi, label):
 def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
     """
     Render a 2x2 grid over tasks (rows) and models (cols) for a given metric, with per-layer 95% CIs.
+
+    NOTE: fixed task/model order and fixed y-limits are intentional for cross-panel comparability.
     """
     tasks_order = ["medqa", "pubmedqa"]
     models_order = ["mistral", "biomistral"]
@@ -441,6 +458,7 @@ def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
                 ax.set_axis_off()
                 continue
 
+            # Invariant: x is layer index; per-panel sort ensures monotonic x even if input CSV is shuffled.
             sub = sub.sort_values("layer")
             x = sub["layer"].to_numpy(dtype=int)
 
@@ -498,6 +516,7 @@ def plot_task_overlay_auroc(df_task: pd.DataFrame, task: str):
     """Overlay AUROC-by-layer curves for both models within a single task."""
     fig, ax = plt.subplots(figsize=(11.5, 5.2))
 
+    # Overlay keeps task fixed while comparing models; y-limits are global for cross-task comparability.
     for model in ["mistral", "biomistral"]:
         sub = df_task[df_task["model"] == model].sort_values("layer")
         if len(sub) == 0:

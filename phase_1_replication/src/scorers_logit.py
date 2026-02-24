@@ -9,16 +9,13 @@ Determinism: inference is deterministic given fixed model weights, tokenization,
 a fixed cache state; this module does not introduce randomness.
 """
 
-# scorers_logit.py
+# phase_1_replication/src/scorers_logit.py
 
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, Literal
-
 import numpy as np
 import torch
-
 from modeling_llm import LLMWrapper, BatchEncodedQA
 
 

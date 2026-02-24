@@ -7,14 +7,12 @@ Determinism: conversion is deterministic given the input file and key-candidate 
 no randomness, timestamps, or environment-dependent ordering is introduced.
 """
 
-# src/prepare_truthfulqa_simplified.py
-#
+# phase_1_replication/src/prepare_truthfulqa_simplified.py
 # Optional provenance helper: derive a simplified TruthfulQA JSON from an export.
 # Not required for Phase 1 reproduction (Phase 1 uses the frozen JSONL file).
 # Adjust *_KEYS below if your TruthfulQA export uses different field names.
 
 from __future__ import annotations
-
 import argparse
 import json
 from pathlib import Path

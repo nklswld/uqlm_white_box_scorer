@@ -1,4 +1,3 @@
-# src/scorers_gradient.py
 """
 Compute gradient- and embedding-based primitives for QA hallucination scoring.
 Inputs: (question:str, answer:str) pairs and an LLMWrapper providing encode_qa() alignment.
@@ -8,12 +7,10 @@ Determinism: forward-only paths are deterministic given model + inputs; grad_nor
 recomputed per sample (no randomness introduced here).
 """
 
+# phase_1_replication/src/scorers_gradient.py
 from __future__ import annotations
-
 from typing import Dict, List, Optional, Sequence, Tuple
-
 import torch
-
 from modeling_llm import LLMWrapper
 
 # ---------------------------------------------------------------------

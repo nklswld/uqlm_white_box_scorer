@@ -1,29 +1,15 @@
-# phase_2_medical/analysis/ablations/analyze_delta_vs_random.py
-#
-# Ablation: Δ vs Random Baseline (paired)
-# Uses the *general* Phase-2 outputs in: phase_2_medical/outputs/final/
-#
-# What it does:
-#   For each Task × Model × Scorer, compute bootstrap distributions of
-#     - AUROC
-#     - Spearman ρ
-#   using the saved bootstrap indices from the corresponding
-#   *.manifest.bootstrap_indices.npz file.
-#
-# Then compute paired deltas vs random baselines:
-#   ΔAUROC    = AUROC_boot - 0.5
-#   ΔSpearman = rho_boot   - 0.0
-#
-# Outputs:
-#   CSVs:
-#     - phase_2_medical/outputs/ablations/delta_vs_random/analysis_delta_vs_random_metrics.csv
-#     - phase_2_medical/outputs/ablations/delta_vs_random/analysis_delta_vs_random_summary.csv
-#   Figures:
-#     - phase_2_medical/outputs/figures_tables/ablations/delta_vs_random/fig_ablation_delta_vs_random_auroc.pdf
-#     - phase_2_medical/outputs/figures_tables/ablations/delta_vs_random/fig_ablation_delta_vs_random_spearman.pdf
-#
-# Style/structure: aligned with phase2_figures.py and the other ablation analyzers.
+"""
+Paired ablation analysis: bootstrap Δ-metrics vs a random baseline for Phase-2 medical runs.
 
+Inputs: per (task, model) a `*.results.jsonl` with per-example labels and scorer outputs,
+plus the matching `*.manifest.bootstrap_indices.npz` containing saved bootstrap resample indices.
+Outputs: (i) per-run metric table + compact summary CSV, and (ii) two PDF figures with ΔAUROC and ΔSpearman.
+Method: compute bootstrap distributions for AUROC and Spearman ρ, then subtract fixed baselines (0.5 / 0.0)
+to obtain paired Δ distributions and 95% percentile CIs.
+Determinism: fully deterministic given the on-disk `bootstrap_indices.npz` (no RNG used here).
+"""
+
+# phase_2_medical/analysis/ablations/analyze_delta_vs_random.py
 import json
 from pathlib import Path
 
@@ -35,7 +21,7 @@ from sklearn.metrics import roc_auc_score
 
 
 # ============================================================
-# Style: consistent with phase2_figures.py
+# Plot style (kept consistent with phase2_figures.py for paper-wide comparability)
 # ============================================================
 FONT_SCALE = 1.35
 
@@ -64,6 +50,7 @@ mpl.rcParams.update({
 
     "axes.titlepad": 12,
 
+    # Embed fonts for consistent PDF rendering across viewers/platforms.
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -76,8 +63,10 @@ ERRORBAR_LINEWIDTH = 1.6
 ERRORBAR_CAPTHICK = 1.6
 BASELINE_LINEWIDTH = 1.4
 
+# Human-readable labels for paper figures/tables.
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
+
 
 SCORE_PRETTY = {
     "lntp": "LNTP",
@@ -86,11 +75,14 @@ SCORE_PRETTY = {
     "hidden_probe_oof": "Hidden",
 }
 
+# Ordering convention controls x-axis ordering + cross-figure comparability.
 SCORE_ORDER = ["lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"]
 MAIN_SCORES = set(SCORE_ORDER)
 
+# Random baselines used for paired deltas: AUROC vs chance (0.5), Spearman vs null correlation (0.0).
 BASELINES = {"auroc": 0.5, "spearman": 0.0}
 
+# Bootstrap NPZ keys may use short names; map result.jsonl score keys -> NPZ bootstrap key.
 SCORE_TO_BOOTKEY = {
     "lntp": "lntp",
     "mtp": "mtp",
@@ -100,6 +92,7 @@ SCORE_TO_BOOTKEY = {
 
 
 def pretty_score(k: str) -> str:
+    """Return a human-friendly scorer name (fallback to the raw key)."""
     kk = str(k).lower()
     return SCORE_PRETTY.get(kk, kk)
 
@@ -108,6 +101,11 @@ def pretty_score(k: str) -> str:
 # Robust save helper (Windows PDF file lock)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
+    """
+    Save a figure, retrying with versioned filenames if the target PDF is open/locked.
+
+    NOTE: potential issue: version suffixes (_vK) can accumulate if PDFs are repeatedly left open during reruns.
+    """
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -131,12 +129,17 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # ============================================================
 def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
                               fmt="{:.3f}", fontsize=None, pad_frac=0.02):
+    """
+    Annotate bar heights with numeric values placed above the CI upper cap.
+
+    NOTE: potential issue: assumes the current y-limits are final (pad computed from `ax.get_ylim()`).
+    """
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
     y_min, y_max = ax.get_ylim()
     span = y_max - y_min
-    pad = pad_frac * span
+    pad = pad_frac * span  # pad scales with plot span to keep consistent visual spacing
 
     for x, y, eh in zip(x_positions, y_values, yerr_high):
         if y is None or (isinstance(y, float) and np.isnan(y)):
@@ -150,6 +153,7 @@ def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
 # IO helpers
 # ============================================================
 def load_jsonl(path: Path):
+    """Load JSONL into a list of dict rows (skips empty lines)."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -160,6 +164,11 @@ def load_jsonl(path: Path):
 
 
 def np_load_first_array(npz_path: Path):
+    """
+    Load the first matching array from a NPZ under common key conventions.
+
+    NOTE: potential issue: if multiple arrays exist and none match the expected keys, the first file entry is used.
+    """
     z = np.load(npz_path, allow_pickle=True)
     for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if k in z.files:
@@ -169,14 +178,16 @@ def np_load_first_array(npz_path: Path):
 
 def load_bootstrap_indices_map(boot_path: Path) -> dict:
     """
-    Load ALL bootstrap index arrays from the NPZ as a dict.
-    Each key corresponds to a scorer (e.g., lntp, mtp, egh, hidden) and
-    optionally includes hidden_kept_indices.
+    Load ALL bootstrap index arrays from an NPZ as a lowercased-key dict.
+
+    Keys correspond to scorers (e.g., lntp/mtp/egh/hidden) and may include
+    `hidden_kept_indices` (global indices into the full dataset for the hidden scorer).
     """
     z = np.load(boot_path, allow_pickle=True)
     out = {}
     for k in z.files:
         arr = z[k]
+        # Some serializers store a ragged object array; stack to a 2D (B, n) index matrix.
         if isinstance(arr, np.ndarray) and arr.dtype == object:
             arr = np.stack(arr, axis=0)
         out[str(k).lower()] = arr.astype(int)
@@ -184,6 +195,12 @@ def load_bootstrap_indices_map(boot_path: Path) -> dict:
 
 
 def find_label_key(example: dict):
+    """
+    Heuristically identify the label field in a Phase-2 row.
+
+    NOTE: potential issue: label-key precedence is heuristic and may not match the canonical Phase-2 schema
+    (e.g., is_error vs label/target variants) across all run variants.
+    """
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example:
             return k
@@ -192,11 +209,12 @@ def find_label_key(example: dict):
 
 def extract_scores(example: dict):
     """
-    Extract score fields robustly from Phase-2 results rows.
+    Extract score fields robustly from Phase-2 result rows.
 
-    IMPORTANT:
-    - Phase-2 results.jsonl stores scores as top-level keys (lntp, mtp, egh_probe_oof, hidden_probe_oof).
-    - hidden_probe_oof can be null -> must be preserved as np.nan so downstream can subset via hidden_kept_indices.
+    Convention:
+    - Prefer explicit top-level scorer keys (lntp/mtp/egh_probe_oof/hidden_probe_oof), even if null.
+    - Preserve `hidden_probe_oof=None` as np.nan so bootstrap on `hidden_kept_indices` can subset safely.
+    - Also support nested dict schemas (`scores`, `wb_scores`) for compatibility across run variants.
     """
     scores = {}
 
@@ -221,7 +239,8 @@ def extract_scores(example: dict):
             elif isinstance(v, (float, int)):
                 scores[str(k).lower()] = float(v)
 
-    # 3) Fallback heuristic (kept, but now it won't drop explicit keys)
+    # 3) Fallback heuristic: capture numeric fields whose key suggests a known scorer.
+    # NOTE: potential issue: may pick up unintended numeric fields if their names include these substrings.
     for k, v in example.items():
         kk = str(k).lower()
         if kk in scores:
@@ -234,6 +253,11 @@ def extract_scores(example: dict):
 
 
 def auroc_best_direction(y: np.ndarray, s: np.ndarray):
+    """
+    Compute AUROC and choose a polarity that yields AUROC >= 0.5.
+
+    Convention: if AUROC < 0.5, flip scores (s -> -s) and record direction = -1.
+    """
     au = roc_auc_score(y, s)
     if au < 0.5:
         return roc_auc_score(y, -s), -1.0
@@ -241,6 +265,7 @@ def auroc_best_direction(y: np.ndarray, s: np.ndarray):
 
 
 def spearman_rho(s: np.ndarray, y: np.ndarray) -> float:
+    """Compute Spearman ρ via pandas (handles ranking/ties; returns np.nan on undefined)."""
     # Spearman via pandas for robust ranking/ties handling
     rho = pd.Series(s).corr(pd.Series(y), method="spearman")
     return float(rho) if pd.notna(rho) else np.nan
@@ -254,7 +279,7 @@ def bootstrap_metric_distributions(y: np.ndarray, s: np.ndarray, boot_idx: np.nd
         yy = y[idx]
         ss = s[idx]
         if yy.min() == yy.max():
-            # AUROC undefined if only one class in sample
+            # AUROC undefined for a single-class resample; skip this replicate (reduces effective B).
             continue
         aucs.append(roc_auc_score(yy, ss))
         rr = spearman_rho(ss, yy)
@@ -267,7 +292,9 @@ def bootstrap_metric_distributions(y: np.ndarray, s: np.ndarray, boot_idx: np.nd
 
 
 def ci_from_dist(dist: np.ndarray, alpha=0.05):
+    """Return (mean, lo, hi) using percentile CI on a bootstrap distribution (NaN triplet if empty)."""
     if dist.size == 0:
+        # NOTE: potential issue: upstream skips (e.g., single-class resamples) can yield empty distributions.
         return np.nan, np.nan, np.nan
     mean = float(np.mean(dist))
     lo = float(np.quantile(dist, alpha / 2))
@@ -285,7 +312,7 @@ FINAL_DIR = ROOT / "outputs" / "final"
 FIGS_OUT = ROOT / "outputs" / "figures_tables" / "ablations" / "delta_vs_random"
 FIGS_OUT.mkdir(parents=True, exist_ok=True)
 
-# CSVs sollen ebenfalls hier gespeichert werden
+# CSVs sollen ebenfalls hier gespeichert werden (co-locate artifacts for this ablation).
 CSV_OUT = FIGS_OUT
 
 
@@ -309,9 +336,10 @@ runs = []
 for results_path in sorted(FINAL_DIR.glob("*.results.jsonl")):
     name = results_path.name  # e.g. medqa_mistral.B5000.results.jsonl
     if ".B" not in name:
+        # Convention: only analyze runs produced with explicit bootstrap size marker.
         continue
 
-    # parse task/model from prefix "<task>_<model>"
+    # Parse task/model from prefix "<task>_<model>" (lowercased for stable joins/labels).
     prefix = name.split(".B")[0]
     if "_" not in prefix:
         continue
@@ -319,7 +347,7 @@ for results_path in sorted(FINAL_DIR.glob("*.results.jsonl")):
     task = task.lower()
     model = model.lower()
 
-    # bootstrap indices: try canonical naming and fallback glob
+    # Bootstrap indices: try canonical naming first, then fall back to a glob match.
     stem = name.replace(".results.jsonl", "")
     boot_path = FINAL_DIR / f"{stem}.manifest.bootstrap_indices.npz"
     if not boot_path.exists():
@@ -327,6 +355,7 @@ for results_path in sorted(FINAL_DIR.glob("*.results.jsonl")):
         boot_path = gl[0] if gl else None
 
     if boot_path is None or not boot_path.exists():
+        # Missing indices => cannot reproduce the intended bootstrap; skip run to avoid mixing schemes.
         print("[WARN] Missing bootstrap indices for:", results_path.name)
         continue
 
@@ -346,11 +375,13 @@ records = []
 for task, model, results_path, boot_path in runs:
     rows = load_jsonl(results_path)
     if not rows:
+        # No rows => nothing to analyze; do not emit partial records.
         continue
 
     y_key = find_label_key(rows[0])
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
+    # Align per-example scorer arrays by row order; later we intersect keys to keep common scorers only.
     score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
@@ -365,23 +396,25 @@ for task, model, results_path, boot_path in runs:
 
     boot_map = load_bootstrap_indices_map(boot_path)
 
-    # optional: hidden kept indices (global indices into full dataset)
+    # Optional: for the hidden scorer, bootstrap indices are defined over a kept-subset.
     hidden_kept = boot_map.get("hidden_kept_indices", None)
 
     for score_key, s_raw in S.items():
-        score_l = score_key.lower()   # <-- FIX: define early
+        score_l = score_key.lower()   # normalize once; used for mapping + special-casing
         s_raw = np.asarray(s_raw, dtype=float)
 
-        # For hidden: direction should be determined on the kept subset (same population as bootstrap)
+        # Determine score polarity once per scorer to enforce AUROC >= 0.5 (and reuse across all bootstraps).
+        # For hidden: direction must be learned on the kept subset (same population as the hidden bootstrap).
         if score_l == "hidden_probe_oof" and ("hidden_kept_indices" in boot_map):
             hk = boot_map["hidden_kept_indices"]
             au_full, direction = auroc_best_direction(y[hk], s_raw[hk])
         else:
             au_full, direction = auroc_best_direction(y, s_raw)
 
+        # Apply chosen polarity consistently to all downstream metrics (AUROC + Spearman).
         s = s_raw * direction
 
-        # pick correct bootstrap indices for this score
+        # Pick correct bootstrap indices for this scorer (NPZ keys may use shortened names).
         boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
 
         if boot_key not in boot_map:
@@ -390,13 +423,13 @@ for task, model, results_path, boot_path in runs:
 
         boot_idx = boot_map[boot_key]
 
-        # Special case: hidden is bootstrapped on the kept-subset (indices are relative to that subset)
+        # Special case: hidden is bootstrapped on the kept-subset (indices are relative to that subset).
         if score_l == "hidden_probe_oof":
             if hidden_kept is None:
                 raise KeyError(
                     f"hidden_kept_indices missing in {boot_path.name} but required for hidden bootstrap."
                 )
-            # hidden_kept are indices into FULL y/s arrays
+            # hidden_kept are indices into FULL y/s arrays (subset selection happens before indexing by boot_idx).
             y_use = y[hidden_kept]
             s_use = s[hidden_kept]
         else:
@@ -405,15 +438,15 @@ for task, model, results_path, boot_path in runs:
 
         au_dist, sp_dist = bootstrap_metric_distributions(y_use, s_use, boot_idx)
 
-        # paired deltas vs random
+        # Paired deltas vs fixed random baselines (computed in bootstrap-space).
         d_au = au_dist - BASELINES["auroc"]
         d_sp = sp_dist - BASELINES["spearman"]
 
-        # CI in delta-space (paired)
+        # CI in delta-space (paired): preserves within-replicate correlation between metric and baseline.
         d_au_mean, d_au_lo, d_au_hi = ci_from_dist(d_au, alpha=0.05)
         d_sp_mean, d_sp_lo, d_sp_hi = ci_from_dist(d_sp, alpha=0.05)
 
-        # also store absolute metrics for reference
+        # Also store absolute metrics for reference (helps sanity-check direction/baseline effects).
         au_mean, au_lo, au_hi = ci_from_dist(au_dist, alpha=0.05)
         sp_mean, sp_lo, sp_hi = ci_from_dist(sp_dist, alpha=0.05)
 
@@ -433,6 +466,7 @@ for task, model, results_path, boot_path in runs:
             "delta_auroc_boot_mean": float(d_au_mean),
             "delta_auroc_ci95_lo": float(d_au_lo),
             "delta_auroc_ci95_hi": float(d_au_hi),
+            # Significance heuristic: Δ CI entirely above 0 implies improvement vs random baseline.
             "delta_auroc_sig_pos": bool(np.isfinite(d_au_lo) and d_au_lo > 0.0),
 
             "spearman_boot_mean": float(sp_mean),
@@ -457,7 +491,7 @@ print("Wrote:", out_metrics)
 
 
 
-# Summary (compact)
+# Summary (compact, paper/table-friendly slice)
 df_sum = df[[
     "task", "model", "score_key",
     "delta_auroc_boot_mean", "delta_auroc_ci95_lo", "delta_auroc_ci95_hi", "delta_auroc_sig_pos",
@@ -473,6 +507,7 @@ print("Wrote:", out_summary)
 # Plotting: compact grid (rows=models, cols=tasks)
 # One figure per metric: ΔAUROC and ΔSpearman
 # ============================================================
+# Stable ordering: prefer canonical task/model order, then append any additional discovered categories.
 tasks = [t for t in ["medqa", "pubmedqa"] if t in set(df["task"])]
 tasks += sorted([t for t in set(df["task"]) if t not in tasks])
 
@@ -484,6 +519,7 @@ score_order += sorted([k for k in set(df["score_key"]) if k not in score_order])
 
 
 def plot_delta(metric: str, outpath: Path):
+    """Render a task×model grid for a given Δ-metric with 95% CI error bars."""
     if metric == "auroc":
         mean_col = "delta_auroc_boot_mean"
         lo_col = "delta_auroc_ci95_lo"
@@ -497,19 +533,20 @@ def plot_delta(metric: str, outpath: Path):
         ylabel = r"$\Delta$ Spearman $\rho$ (vs. 0.0)"
         title = r"$\Delta$ vs Random Baseline (paired) — $\Delta\rho$ $\pm$ 95% CI"
 
-    # global y-limits (tight, symmetric-ish around 0)
+    # Global y-limits: enforce a shared scale across subplots to support visual comparison.
     vals = df[[lo_col, hi_col]].to_numpy(dtype=float).reshape(-1)
     vals = vals[np.isfinite(vals)]
     if vals.size == 0:
+        # Fallback range to keep plots readable if all distributions are empty/NaN.
         y_min, y_max = -0.05, 0.20
     else:
         pad = 0.01 * (float(np.max(vals)) - float(np.min(vals)) + 1e-9)
         y_min = float(np.min(vals)) - pad
         y_max = float(np.max(vals)) + pad
-        # ensure 0 line visible
+        # Ensure the Δ=0 reference line is visible even if all CIs are positive/negative.
         y_min = min(y_min, -0.01)
         y_max = max(y_max, 0.01)
-        # give headroom so value labels don't collide with subplot titles (without blowing up the scale)
+        # Add headroom so value labels do not collide with subplot titles (keeps scale comparable).
         y_max = y_max + 0.10 * (y_max - y_min + 1e-9)
 
 
@@ -519,6 +556,7 @@ def plot_delta(metric: str, outpath: Path):
         sharey=True
     )
 
+    # Normalize axes shape to 2D for uniform indexing across 1×N / N×1 / 1×1 layouts.
     if len(models) == 1 and len(tasks) == 1:
         axes = np.array([[axes]])
     elif len(models) == 1:
@@ -534,11 +572,13 @@ def plot_delta(metric: str, outpath: Path):
                 ax.axis("off")
                 continue
 
+            # Enforce consistent scorer ordering; missing scorers become NaN via reindex below.
             sub["score_key"] = pd.Categorical(sub["score_key"], categories=score_order, ordered=True)
             sub = sub.sort_values("score_key")
 
             x = np.arange(len(score_order), dtype=float)
 
+            # Alignment invariant: reindex(score_order) ensures y/lo/hi arrays share identical ordering/length.
             y = sub.set_index("score_key").reindex(score_order)[mean_col].to_numpy(dtype=float)
             lo = sub.set_index("score_key").reindex(score_order)[lo_col].to_numpy(dtype=float)
             hi = sub.set_index("score_key").reindex(score_order)[hi_col].to_numpy(dtype=float)
@@ -555,7 +595,7 @@ def plot_delta(metric: str, outpath: Path):
                 elinewidth=ERRORBAR_LINEWIDTH,
                 capthick=ERRORBAR_CAPTHICK,
             )
-            ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+            ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Δ=0: no improvement vs baseline
 
             ax.set_xticks(x)
             ax.set_xticklabels([pretty_score(k) for k in score_order], rotation=20, ha="right")
@@ -568,6 +608,7 @@ def plot_delta(metric: str, outpath: Path):
                 ax.set_title(TASK_PRETTY.get(task, task), pad=13) 
 
             if c == len(tasks) - 1:
+                # Row label on the rightmost subplot to avoid duplicating labels in every panel.
                 ax.text(
                     1.02, 0.5,
                     MODEL_PRETTY.get(model, model),

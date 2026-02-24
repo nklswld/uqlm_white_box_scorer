@@ -55,6 +55,7 @@ mpl.rcParams.update({
 VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 
 # Global y-limits enforce consistent scaling across tasks/models within a metric panel.
+# NOTE: potential issue: fixed y-limits may clip values if future runs fall outside these ranges.
 AUROC_YLIM = (0.45, 0.80)
 SPEARMAN_YLIM = (-0.05, 0.60)
 
@@ -78,6 +79,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
         fig.savefig(outpath, **kwargs)
         return outpath
     except PermissionError:
+        # Common failure mode: Windows PDF viewers may lock the target file; write a versioned fallback.
         stem, suffix = outpath.stem, outpath.suffix
         for k in range(2, 50):
             alt = outpath.with_name(f"{stem}_v{k}{suffix}")
@@ -99,7 +101,7 @@ def add_value_labels_above_ci(ax, x_positions, y_values, yerr_high,
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
-    # Pad in axis units to avoid label/whisker collisions across different y-limits.
+    # Pad in axis units (relative to current y-span) to avoid label/whisker collisions across metrics.
     y_min, y_max = ax.get_ylim()
     span = y_max - y_min
     pad = pad_frac * span
@@ -135,7 +137,7 @@ def load_bootstrap_indices(boot_path: Path, key: str | None = None):
     """
     z = np.load(boot_path, allow_pickle=True)
 
-    # Prefer explicit key when available (most important for phase-2 artifacts)
+    # Prefer explicit key to avoid accidentally using a different index matrix from the same NPZ.
     if key is not None and key in z.files:
         arr = z[key]
     else:
@@ -146,8 +148,10 @@ def load_bootstrap_indices(boot_path: Path, key: str | None = None):
                 break
         else:
             # Last resort: first stored array (kept for robustness, but not ideal)
+            # NOTE: potential issue: fallback to the first NPZ array can silently select an unintended matrix.
             arr = z[z.files[0]]
 
+    # Some writers store indices as an object array; stack to [B, N] for downstream indexing.
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
@@ -322,6 +326,7 @@ for task, model, manifest_path, results_path, boot_path in runs:
     keys = set(score_dicts[0].keys())
     for d in score_dicts[1:]:
         keys &= set(d.keys())
+    # NOTE: potential issue: intersecting keys can silently drop partially-logged score fields for a run.
     S = {k: np.array([d[k] for d in score_dicts], dtype=float) for k in keys}
 
     missing_core = [k for k in CORE_CATS if k not in S]
@@ -334,7 +339,7 @@ for task, model, manifest_path, results_path, boot_path in runs:
         "egh_probe_scalar_only": "egh_scalar",
     }
 
-    # Core ablation categories
+    # Core ablation categories: scalar-only probe vs (G+E) vector probe.
     for cat in CORE_CATS:
         s_raw = S[cat]
         # Polarity is standardized per-run to avoid mixing "higher = better" vs "higher = worse" scores.
@@ -377,6 +382,7 @@ for task, model, manifest_path, results_path, boot_path in runs:
         au, direction = auroc_with_best_direction(y, s_raw)
         s = s_raw * direction
 
+        # Convention: appendix scalar signals reuse the scalar bootstrap matrix for within-run comparability.
         boot_idx_scalar = load_bootstrap_indices(boot_path, key="egh_scalar")
 
         au_mean, au_lo, au_hi = bootstrap_ci_from_indices(y, s, boot_idx_scalar, alpha=0.05)

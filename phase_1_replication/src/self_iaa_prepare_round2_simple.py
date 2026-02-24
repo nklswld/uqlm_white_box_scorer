@@ -6,8 +6,7 @@ Sampling is 50/50 by Phase-1 "hallucinated" label; template order is independent
 Deterministic/reproducible given SEED, N_TOTAL, and an unchanged input file content/order.
 """
 
-# src/self_iaa_prepare_round2_simple.py
-#
+# phase_1_replication/src/self_iaa_prepare_round2_simple.py
 # NOTE: potential issue: reproducibility depends on stable input ordering within INPUT_PATH (sampling indexes rows).
 
 from __future__ import annotations

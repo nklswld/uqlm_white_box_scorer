@@ -1,29 +1,15 @@
+"""Ablation analysis: robustness of out-of-fold (OOF) probe metrics across CV fold counts (n_splits).
+Reads per-run manifests, result records (JSONL), and precomputed bootstrap resampling indices (NPZ).
+Computes AUROC and Spearman correlation with bootstrap 95% CIs for each (task, model, n_splits, score).
+Writes per-setting metrics and a stability summary (mean/std across n_splits), plus overlay figures.
+Determinism: results are fully deterministic given the stored bootstrap indices and static artifacts.
+"""
+
 # phase_2_medical/analysis/ablations/analyze_n_splits.py
-#
-# Ablation: OOF Robustness over different n_splits (e.g., 3, 5, 10)
-# Goal: quantify bias/variance trade-off; probe should not be overly sensitive to the fold count.
-#
-# Expected artifacts per setting (analog to other ablations):
-#   *.manifest.json
-#   corresponding *.results.jsonl
-#   corresponding *.manifest.bootstrap_indices.npz   (or any *bootstrap_indices*.npz)
-#
-# Folder convention (recommended):
-#   phase_2_medical/outputs/ablations/n_splits/<task>_<model>/n_splits_3/...
-#   phase_2_medical/outputs/ablations/n_splits/<task>_<model>/n_splits_5/...
-#   phase_2_medical/outputs/ablations/n_splits/<task>_<model>/n_splits_10/...
-#
-# Outputs:
-#  - phase_2_medical/outputs/ablations/n_splits/analysis_n_splits_metrics.csv
-#      (per-setting metrics with bootstrap CI, for LNTP/MTP/EGH/Hidden)
-#  - phase_2_medical/outputs/ablations/n_splits/analysis_n_splits_summary.csv
-#      (per task×model×score: mean/std across n_splits settings)
-#  - phase_2_medical/outputs/figures_tables/ablations/n_splits/
-#      fig_ablation_n_splits_auroc_overlay.pdf
-#      fig_ablation_n_splits_spearman_overlay.pdf
-#      fig_ablation_n_splits_auroc_by_task_model.pdf (optional detailed panel)
-#
-# IMPORTANT: Styling and structure match phase2_figures.py and your other ablation scripts.
+# Ablation: OOF robustness across CV fold counts (n_splits).
+# Expects per-run artifacts: *.manifest.json, corresponding results JSON(L), and *bootstrap_indices*.npz.
+# Folder convention: outputs/ablations/n_splits/<task>_<model>/n_splits_<K>/...
+# IMPORTANT: Styling/structure match phase2_figures.py and other ablation scripts.
 
 import json
 import re
@@ -39,7 +25,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.5  # keep consistent
+FONT_SCALE = 1.5  # shared figure typography scaling across the repo
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -65,6 +51,7 @@ mpl.rcParams.update({
     "xtick.minor.width": 1.0,
     "ytick.minor.width": 1.0,
     
+    # Embed fonts in vector outputs for consistent PDF rendering across viewers/platforms
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "mathtext.fontset": "dejavuserif",
@@ -72,6 +59,7 @@ mpl.rcParams.update({
 
 VALUE_LABEL_FONTSIZE = int(11 * FONT_SCALE)
 
+# Fixed y-limits enforce cross-panel comparability across tasks/models/scores.
 AUROC_YLIM = (0.45, 0.85)
 SPEARMAN_YLIM = (-0.10, 0.70)
 
@@ -93,10 +81,12 @@ SCORE_PRETTY = {
     "hidden_probe_oof": "Hidden",
 }
 
+# Score keys expected in per-example JSONL; these are the only metrics included in plots/tables.
 MAIN_SCORES = ["lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"]
 
 
 def pretty_score(k: str) -> str:
+    """Map internal score keys to short, figure-friendly labels."""
     kk = str(k).lower()
     return SCORE_PRETTY.get(kk, kk)
 
@@ -119,12 +109,14 @@ OUT_CSV_SUMMARY = FIGS_DIR / "analysis_n_splits_summary.csv"
 # Robust save helper (Windows PDF file lock)
 # ============================================================
 def safe_savefig(fig, outpath: Path, **kwargs):
+    """Save a figure, auto-versioning the filename on Windows file-lock PermissionError."""
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
     try:
         fig.savefig(outpath, **kwargs)
         return outpath
     except PermissionError:
+        # NOTE: potential issue: repeated PermissionError usually means the PDF is open in a viewer.
         stem, suffix = outpath.stem, outpath.suffix
         for k in range(2, 50):
             alt = outpath.with_name(f"{stem}_v{k}{suffix}")
@@ -141,6 +133,7 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # Helpers
 # ============================================================
 def load_jsonl(path: Path):
+    """Load a JSONL file into a list of dicts (one dict per non-empty line)."""
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -151,6 +144,7 @@ def load_jsonl(path: Path):
 
 
 def np_load_first_array(npz_path: Path):
+    """Legacy NPZ loader: return a best-effort primary array from common key conventions."""
     z = np.load(npz_path, allow_pickle=True)
     for k in ["indices", "boot_idx", "bootstrap_indices", "idx"]:
         if k in z.files:
@@ -159,6 +153,7 @@ def np_load_first_array(npz_path: Path):
 
 
 def load_bootstrap_indices(boot_path: Path, key: str | None = None):
+    """Load bootstrap resampling indices, supporting multi-key NPZ files and legacy single-array NPZ."""
     z = np.load(boot_path, allow_pickle=True)
 
     # If a specific key is requested and exists, use it.
@@ -174,12 +169,15 @@ def load_bootstrap_indices(boot_path: Path, key: str | None = None):
             # Last resort: first entry (legacy)
             arr = z[z.files[0]]
 
+    # Some pipelines store bootstraps as object arrays (list-like); stack to a 2D int array.
     if isinstance(arr, np.ndarray) and arr.dtype == object:
         arr = np.stack(arr, axis=0)
     return arr.astype(int)
 
 
 def find_label_key(example: dict):
+    """Infer the label field name from a single example record (first hit wins)."""
+    # NOTE: potential issue: multiple label-like keys in the record may lead to unintended selection.
     for k in ["is_error", "label", "y", "target", "hallucinated", "is_hallucinated"]:
         if k in example:
             return k
@@ -187,6 +185,7 @@ def find_label_key(example: dict):
 
 
 def extract_scores(example: dict):
+    """Extract numeric scalar fields as candidate scores, excluding known non-score keys."""
     skip = {"qid", "task", "label", "gold", "pred", "model_answer", "meta"}
     out = {}
     for k, v in example.items():
@@ -198,6 +197,8 @@ def extract_scores(example: dict):
 
 
 def auroc_with_best_direction(y, s_raw):
+    """Compute AUROC and flip sign if needed so that AUROC >= 0.5 (direction recorded separately)."""
+    # Convention: scores are oriented so "higher = more positive class" post-hoc via sign flip.
     au = roc_auc_score(y, s_raw)
     if au < 0.5:
         return roc_auc_score(y, -s_raw), -1.0
@@ -205,15 +206,18 @@ def auroc_with_best_direction(y, s_raw):
 
 
 def bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05):
+    """Bootstrap AUROC mean and two-sided CI using precomputed resampling indices."""
     vals = []
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Skip degenerate resamples where AUROC is undefined (single-class sample).
         if len(np.unique(yy)) < 2:
             continue
         vals.append(roc_auc_score(yy, ss))
     vals = np.array(vals, dtype=float)
     if vals.size == 0:
+        # All resamples degenerate -> report NaNs to avoid silently misleading certainty.
         return np.nan, np.nan, np.nan
     mean = float(np.mean(vals))
     lo = float(np.quantile(vals, alpha / 2))
@@ -222,12 +226,14 @@ def bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05):
 
 
 def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
+    """Bootstrap Spearman ρ mean and two-sided CI using precomputed resampling indices."""
     vals = []
     y = np.asarray(y)
     s = np.asarray(s)
     for idx in boot_idx:
         yy = y[idx]
         ss = s[idx]
+        # Keep the same degeneracy guard as AUROC for comparability across metrics.
         if len(np.unique(yy)) < 2:
             continue
         rho = pd.Series(ss).corr(pd.Series(yy), method="spearman")
@@ -244,6 +250,7 @@ def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
 
 
 def infer_task_model_from_manifest(manifest: dict, fallback_path: Path):
+    """Infer (task, model) from manifest/config, falling back to path heuristics."""
     task = manifest.get("task", None)
     if task is None:
         name = fallback_path.name.lower()
@@ -274,6 +281,7 @@ def infer_task_model_from_manifest(manifest: dict, fallback_path: Path):
 
 
 def infer_n_splits(manifest: dict, manifest_path: Path):
+    """Infer CV fold count from manifest/config or common folder naming patterns."""
     # Prefer manifest/config key if present
     cfg = manifest.get("config", {}) if isinstance(manifest.get("config", {}), dict) else {}
     for key in ["n_splits", "nsplits", "cv_splits"]:
@@ -295,6 +303,7 @@ def infer_n_splits(manifest: dict, manifest_path: Path):
 
 
 def find_runs(abl_root: Path):
+    """Locate complete ablation runs by pairing manifest, results, and bootstrap-index artifacts."""
     manifests = sorted(abl_root.rglob("*.manifest.json"))
     runs = []
     for mp in manifests:
@@ -330,6 +339,7 @@ def find_runs(abl_root: Path):
             if gl:
                 boot_path = gl[0]
 
+        # Skip incomplete runs; these omissions affect aggregate counts but avoid mixing partial artifacts.
         if results_path is None or boot_path is None:
             continue
 
@@ -356,10 +366,11 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
     if not rows:
         continue
 
-    y_key = find_label_key(rows[0])
+    y_key = find_label_key(rows[0])  # label key is inferred once; assumes schema is consistent within a run
     y = np.array([int(r[y_key]) for r in rows], dtype=int)
 
-    # Pull MAIN_SCORES explicitly so hidden_probe_oof can't disappear
+    # Pull MAIN_SCORES explicitly so hidden_probe_oof can't disappear.
+    # Invariant: each score array aligns 1:1 with the JSONL row order (unless later masked for NaNs).
     S = {}
     for k in MAIN_SCORES:
         arr = []
@@ -370,9 +381,8 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
             arr.append(v)
         S[k] = np.asarray(arr, dtype=float)
 
-    # load indices per score (prevents accidentally using the wrong array from NPZ)
-    # fallback keeps legacy behavior if NPZ does not have these keys
-
+    # Load indices per score to avoid accidentally using the wrong NPZ array.
+    # NOTE: bootstrap index dimensionality must align with the effective sample size after masking (hidden_probe_oof); mismatches invalidate CI estimates.
     NPZ_KEY_MAP = {
         "lntp": "lntp",
         "mtp": "mtp",
@@ -396,9 +406,10 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
                 continue
             yy = y[mask]
             ss = s_raw[mask]
+            # NOTE: correct CI estimation assumes bootstrap indices were computed on the same masked subset; verify for hidden_probe_oof artifacts.
 
         au, direction = auroc_with_best_direction(yy, ss)
-        s = ss * direction
+        s = ss * direction  # polarity normalization for downstream metrics and plotting
 
         au_mean, au_lo, au_hi = bootstrap_ci_from_indices(yy, s, boot_idx, alpha=0.05)
         sp_mean, sp_lo, sp_hi = bootstrap_spearman_ci_from_indices(yy, s, boot_idx, alpha=0.05)
@@ -410,8 +421,8 @@ for task, model, n_splits, manifest_path, results_path, boot_path in runs:
             "score_key": score_key,
             "direction": float(direction),
 
-            "N": int(len(yy)),
-            "pos_rate": float(np.mean(yy)),
+            "N": int(len(yy)),               # effective sample size (post-masking for hidden)
+            "pos_rate": float(np.mean(yy)),  # class balance; impacts AUROC stability and CI width
 
             "auroc": float(au),
             "auroc_boot_mean": float(au_mean),
@@ -451,6 +462,7 @@ df_sum = g.agg(
     spearman_std_over_settings=("spearman_rho_boot_mean", "std"),
 )
 
+# Single-setting groups yield NaN std; treat as 0.0 to keep downstream tables numeric.
 for c in ["auroc_std_over_settings", "spearman_std_over_settings"]:
     df_sum[c] = df_sum[c].fillna(0.0)
 
@@ -462,6 +474,7 @@ print("Wrote:", OUT_CSV_SUMMARY)
 # Plotting: overlay per task, lines = models, x = n_splits
 # Separate panels per scorer to keep clarity (matches ablation intent)
 # ============================================================
+# Order tasks/models for consistent panel/legend layout across runs and papers.
 tasks = [t for t in ["medqa", "pubmedqa"] if t in set(df["task"])]
 tasks += sorted([t for t in set(df["task"]) if t not in tasks])
 
@@ -476,10 +489,12 @@ if not splits_order:
     # fallback (if parsing failed)
     splits_order = sorted([int(x) for x in set(df["n_splits"])])
 
+# x positions are categorical (fold counts) but plotted on a numeric axis for clean spacing.
 x = np.arange(len(splits_order), dtype=float)
 
 
 def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
+    """Plot metric overlays across n_splits; each subplot is (score_key, task) with model lines and CI bars."""
     # grid: rows = scorers, cols = tasks
     fig, axes = plt.subplots(len(score_order), len(tasks),
                              figsize=(5.3 * len(tasks), 3.6 * len(score_order)),
@@ -498,21 +513,23 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
                 sub = df[(df["task"] == task) & (df["model"] == model) & (df["score_key"] == score_key)].copy()
                 if sub.empty:
                     continue
+                # Align settings to a shared x-axis order (missing settings become NaNs for gaps).
                 sub = sub.set_index("n_splits").reindex(splits_order).reset_index()
 
                 if metric == "auroc":
                     yv = sub["auroc_boot_mean"].to_numpy(dtype=float)
                     lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
                     hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
-                    hline = 0.5
+                    hline = 0.5  # chance-level AUROC
                     ylabel = "AUROC"
                 else:
                     yv = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
                     lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
                     hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
-                    hline = 0.0
+                    hline = 0.0  # null correlation baseline
                     ylabel = "Spearman ρ"
 
+                # Matplotlib expects asymmetric yerr as [[lower],[upper]] in data units.
                 yerr = np.vstack([yv - lo, hi - yv])
 
                 ax.plot(x, yv, marker="o", label=MODEL_PRETTY.get(model, model))
@@ -522,7 +539,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
             ax.set_xticks(x)
             ax.set_xticklabels([str(s) for s in splits_order])
-            ax.set_ylim(*y_lim)
+            ax.set_ylim(*y_lim)  # global limits per metric to support visual comparison across panels
             ax.grid(False)
 
             if c == 0:
@@ -530,6 +547,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
             if r == 0:
                 ax.set_title(TASK_PRETTY.get(task, task))
 
+    # Legend handles are shared; take from an arbitrary first axis.
     handles, labels = axes[0, 0].get_legend_handles_labels()
 
     fig.legend(

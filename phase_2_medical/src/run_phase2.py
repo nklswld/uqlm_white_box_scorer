@@ -1,10 +1,10 @@
 """
-Phase-2 runner for medical QA evaluation from frozen model outputs.
-Loads a JSONL of precomputed predictions, rebuilds task prompts, and scores uncertainty proxies.
-Inputs: frozen_jsonl (per-example fields incl. question/context/choices, pred/model_answer, is_error label).
-Outputs: results JSONL with per-example scores and a manifest JSON with metrics, versions, and bootstrap indices path.
-Determinism: seeds are fixed (NumPy/Torch + PYTHONHASHSEED); bootstrap resamples are seeded and indices can be saved.
-NOTE: potential issue: Torch backend flags are set best-effort and silently ignored on unsupported builds/hardware.
+Phase-2 runner for medical QA evaluation using frozen model outputs.
+Loads a JSONL of precomputed predictions, rebuilds task prompts, and computes uncertainty proxy scores.
+Inputs: frozen_jsonl (qid, question/context/choices, model_answer, optional pred/gold, is_error, meta) + CLI config.
+Outputs: results JSONL with per-example scores; manifest JSON with metrics, versions, config, and bootstrap indices path.
+Determinism: fixed seeds (NumPy/Torch + PYTHONHASHSEED); seeded, optionally persisted bootstrap resample indices.
+NOTE: potential issue: Torch backend flags are best-effort and may be silently ignored on unsupported builds/hardware.
 """
 
 # phase_2_medical/src/run_phase2.py
@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Phase-1 compatibility: import Phase-1 `src/` by path injection (keeps historical module layout working).
+# Phase-1 compatibility: inject Phase-1 `src/` into sys.path to preserve historical import layout.
 ROOT = Path(__file__).resolve().parents[2]   # repo root
 PHASE1_SRC = ROOT / "phase_1_replication" / "src"
 sys.path.insert(0, str(PHASE1_SRC))
@@ -44,7 +44,7 @@ from bootstrap import BootstrapConfig, bootstrap_auc, bootstrap_auc_diff_with_in
 # Torch runtime (Phase-1 style, best-effort)
 # ----------------------------
 def configure_torch_runtime() -> None:
-    """Best-effort Torch performance toggles (safe to ignore; failures are silently skipped)."""
+    """Best-effort Torch backend toggles; failures are intentionally non-fatal and unreported."""
     os.environ.setdefault("TORCH_SDPA_ENABLE", "1")
     os.environ.setdefault("TORCH_SDPA_DISABLE", "0")
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -72,7 +72,7 @@ configure_torch_runtime()
 # Helpers
 # ----------------------------
 def setup_logging(verbosity: int) -> None:
-    """Configure root logging level from CLI verbosity count."""
+    """Configure root logging level from CLI verbosity count (-v / -vv)."""
     level = logging.WARNING
     if verbosity == 1:
         level = logging.INFO
@@ -89,7 +89,7 @@ logger = logging.getLogger(__name__)
 
 
 def set_global_seeds(seed: int) -> None:
-    """Set global PRNG seeds for reproducible scoring and bootstrapping."""
+    """Set all known PRNG seeds and deterministic CuDNN flags for reproducible scoring."""
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -106,7 +106,7 @@ def ensure_parent_dir(p: Path) -> None:
 
 
 def _jsonify(obj: Any) -> Any:
-    """Convert numpy / torch-ish scalars to JSON-serializable python types."""
+    """Recursively convert numpy / torch-ish scalars and arrays to JSON-serializable types."""
     if isinstance(obj, dict):
         return {k: _jsonify(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -126,7 +126,7 @@ def _jsonify(obj: Any) -> Any:
 
 
 def compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
-    """Compute AUROC with basic shape/class sanity checks."""
+    """Compute AUROC with explicit length and class-coverage checks (binary labels expected)."""
     y = np.asarray(y).reshape(-1).astype(int)
     s = np.asarray(s).reshape(-1).astype(float)
     if y.shape[0] != s.shape[0]:
@@ -138,7 +138,7 @@ def compute_auroc(y: np.ndarray, s: np.ndarray) -> float:
 
 
 def spearman_rho(x: np.ndarray, y: np.ndarray) -> float:
-    """Spearman correlation via average ranks for ties (deterministic mergesort)."""
+    """Spearman rank correlation using deterministic average-rank ties (stable mergesort)."""
     x = np.asarray(x, dtype=float).reshape(-1)
     y = np.asarray(y, dtype=float).reshape(-1)
     if x.size != y.size:
@@ -172,14 +172,14 @@ def spearman_rho(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def truncate_text(s: str, max_chars: int) -> str:
-    """Trim to a maximum character budget (used for PubMedQA context)."""
+    """Hard character-budget truncation (used as a cheap pre-filter before token truncation)."""
     s = (s or "").strip()
     if max_chars <= 0:
         return s
     return s[:max_chars]
 
 def normalize_pubmedqa_pred(s: str) -> str:
-    """Map free-form generation to {yes,no,maybe} using prefix matching; fallback to first token."""
+    """Normalize free-form generation to {yes,no,maybe} by prefix; otherwise return first token."""
     s = (s or "").strip().lower()
     if s.startswith("yes"):
         return "yes"
@@ -191,7 +191,7 @@ def normalize_pubmedqa_pred(s: str) -> str:
     return (s.split()[:1] or [""])[0]
 
 def truncate_to_tokens(text: str, tokenizer, max_tokens: int) -> str:
-    """Truncate a string to max_tokens using the model tokenizer (no special tokens)."""
+    """Tokenizer-aligned truncation to max_tokens (no special tokens; preserves determinism)."""
     text = (text or "").strip()
     if max_tokens <= 0:
         return text
@@ -204,8 +204,8 @@ def truncate_to_tokens(text: str, tokenizer, max_tokens: int) -> str:
 
 def map_hidden_pooling(user_choice: str) -> str:
     """
-    Keep Phase-1 pooling names internally.
-    Accept old Phase-2 names for backward compatibility.
+    Canonicalize pooling identifiers for hidden-feature extraction.
+    Accepts Phase-1 names and a small set of Phase-2 aliases for backward compatibility.
     """
     # Convention: map user-facing aliases to canonical pooling identifiers expected by HiddenFeatureConfig.
     u = (user_choice or "").strip().lower()
@@ -237,7 +237,7 @@ def infer_model_short(model_name: str) -> str:
 # Task prompt builders
 # ----------------------------
 def build_pubmedqa_prompt(question: str, abstract: str) -> str:
-    """Build a PubMedQA prompt constrained to a one-word label."""
+    """Build a PubMedQA prompt constrained to a single label token."""
     return (
         "You are answering a medical question based on the given abstract.\n"
         "Answer using exactly one word from {yes, no, maybe}.\n"
@@ -269,7 +269,7 @@ def build_medqa_prompt(question: str, choices: Dict[str, str]) -> str:
 # ----------------------------
 @dataclass(frozen=True)
 class FrozenRow:
-    """Immutable record of a single frozen QA example plus metadata used for scoring."""
+    """Immutable record for one frozen example (inputs + prediction + label) used for Phase-2 scoring."""
     qid: str
     task: str
     question: str
@@ -283,7 +283,7 @@ class FrozenRow:
 
 
 def load_frozen(path: Path, task: str) -> List[FrozenRow]:
-    """Load newline-delimited JSON into FrozenRow objects (skips empty lines)."""
+    """Load a newline-delimited JSONL file into FrozenRow objects (blank lines are ignored)."""
     out: List[FrozenRow] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -312,7 +312,7 @@ def load_frozen(path: Path, task: str) -> List[FrozenRow]:
 # ----------------------------
 @dataclass(frozen=True)
 class Phase2Config:
-    """CLI configuration for Phase-2 scoring and output paths."""
+    """Configuration snapshot for Phase-2 scoring (arguments are persisted into the manifest)."""
     task: str
     frozen_jsonl: Path
     out_jsonl: Path
@@ -347,7 +347,7 @@ class Phase2Config:
 
 
 def parse_args() -> Phase2Config:
-    """Parse CLI args and synthesize deterministic output filenames when not provided."""
+    """Parse CLI arguments and derive deterministic output paths when not explicitly provided."""
     p = argparse.ArgumentParser(description="Phase 2 – Medical tasks (Frozen Outputs)")
 
     p.add_argument("--task", type=str, required=True, choices=["pubmedqa", "medqa"])
@@ -408,7 +408,7 @@ def parse_args() -> Phase2Config:
     tag = (a.run_tag or "").strip()
     tag_part = f".{tag}" if tag else ""
 
-    # Deterministic naming: ties filenames to task/model/run_tag/bootstrap B for reproducible artifact management.
+    # Deterministic naming ties artifacts to task/model/run_tag/bootstrap-B for reproducible result bookkeeping.
     if a.out_jsonl is None:
         a.out_jsonl = str(out_dir / f"{a.task}_{model_short}{tag_part}.B{int(a.B)}.results.jsonl")
     if a.out_manifest is None:
@@ -447,7 +447,7 @@ def parse_args() -> Phase2Config:
 # Main
 # ----------------------------
 def main() -> None:
-    """Run Phase-2 scoring pipeline and write per-example results + manifest."""
+    """Run Phase-2 scoring and write per-example results JSONL plus a run manifest."""
     cfg = parse_args()
     setup_logging(cfg.verbosity)
     set_global_seeds(cfg.seed)
@@ -459,7 +459,7 @@ def main() -> None:
     if len(examples) == 0:
         raise SystemExit(f"No examples loaded from: {cfg.frozen_jsonl}")
 
-    # Label convention: y==1 denotes "error"/positive class (higher score should indicate higher error likelihood).
+    # Label convention: y==1 is the positive class ("error"); scores should increase with error likelihood.
     y = np.asarray([ex.is_error for ex in examples], dtype=int)
     logger.info(
         "Loaded %d frozen examples for task=%s (pos=%d neg=%d)",
@@ -470,14 +470,14 @@ def main() -> None:
     )
 
     if cfg.task == "pubmedqa":
-        # Use normalized one-token label to avoid scoring prompt-echo or verbose generations.
+        # PubMedQA uses {yes,no,maybe}: normalize to a single token to prevent verbose/echoed generations.
         answers = [normalize_pubmedqa_pred(ex.pred or "") for ex in examples]
     else:
-        # MedQA expects a constrained letter; prefer `pred` when available, else fall back to raw `model_answer`.
+        # MedQA uses option letters: prefer the frozen `pred` when present, else fall back to raw `model_answer`.
         answers = [(ex.pred.strip().upper() if ex.pred else ex.model_answer) for ex in examples]
 
     class Phase2LLM(LLMWrapper):
-        # IMPORTANT: Phase 2 passes fully-formed prompts already.
+        # IMPORTANT: Phase 2 receives fully-formed prompts (question argument is already the full prompt).
         def build_prompt(self, question: str) -> str:
             return question
 
@@ -500,11 +500,11 @@ def main() -> None:
         # Fallback tokenizer ensures deterministic truncation even if LLMWrapper does not expose one.
         tok = transformers.AutoTokenizer.from_pretrained(cfg.model_name, use_fast=True)
 
-    # Build task-specific prompts (Phase-2 scoring uses teacher-forced prompts + provided answers).
+    # Build task-specific prompts (teacher-forcing uses prompt + provided answer; no generation in Phase-2).
     prompts: List[str] = []
     for ex in examples:
         if cfg.task == "pubmedqa":
-            # Two-stage truncation: char budget first (cheap), then token budget (model-aligned).
+            # Two-stage truncation: cheap char cap, then tokenizer-aligned token cap for model safety.
             ctx = truncate_text(ex.context, cfg.max_context_chars)
             ctx = truncate_to_tokens(ctx, tok, cfg.max_context_tokens)
             prompts.append(build_pubmedqa_prompt(ex.question, ctx))
@@ -516,7 +516,7 @@ def main() -> None:
     # ----------------------------
     # Unsupervised: LNTP / MTP
     # ----------------------------
-    # Scoring convention: orientation="uncertainty" should yield higher scores for more uncertain / error-prone examples.
+    # Scoring convention: orientation="uncertainty" => larger score should indicate higher uncertainty/error propensity.
     s_lntp, s_mtp, lntp_stats = compute_lntp_mtp_for_qa_batch(
         llm,
         prompts,
@@ -524,13 +524,14 @@ def main() -> None:
         orientation="uncertainty",
         return_log_stats=True,
     )
+    # lntp_stats is retained for optional debugging/inspection (not currently persisted into outputs here).
     s_lntp = np.asarray(s_lntp, dtype=np.float64)
     s_mtp = np.asarray(s_mtp, dtype=np.float64)
     logger.info("Done: LNTP/MTP")
 
     # ----------------------------
     # EGH primitives (diagnostics + supervised probe inputs)
-    # Probe uses ONLY [G_vec, E_vec] (i.e. grad_norm + emb_diff scalars here)
+    # Probe uses ONLY [G_vec, E_vec] ordering (stable concat for reproducible feature meaning)
     # ----------------------------
     X_egh_rows: List[List[float]] = []
     s_egh_grad: List[float] = []
@@ -554,7 +555,7 @@ def main() -> None:
             strict=True,
             chunk_size=cfg.egh_chunk_size,
         )
-        # Scalars: stored both as standalone diagnostics and as features for scalar-only ablation.
+        # Scalars: logged for inspection and reused as scalar-only probe features (consistent 5D set).
         s_egh_grad.append(float(prim["grad_norm"]))
         s_egh_emb.append(float(prim["emb_diff"]))
         s_egh_kl.append(float(prim["d_loss"]))
@@ -562,7 +563,7 @@ def main() -> None:
         s_egh_entropy.append(float(prim["h_p"]))
 
         
-        # Vector features: concatenate G then E to enforce a stable feature ordering across runs/ablations.
+        # Vector features: concatenate G then E to enforce stable column semantics across runs/ablations.
         g_vec = prim["g_vec"]
         e_vec = prim["e_vec"]
 
@@ -661,7 +662,7 @@ def main() -> None:
     )
 
     # Adapter: build_hidden_feature_matrix expects .question + .model_answer.
-    # We pass the FULL prompt as `.question` to align hidden features with LNTP/MTP teacher-forcing inputs.
+    # We pass the FULL prompt as `.question` so hidden features align with teacher-forcing inputs used elsewhere.
     class _Ex:
         def __init__(self, prompt: str, ans: str):
             self.question = prompt
@@ -678,9 +679,10 @@ def main() -> None:
     hidden_oof, hid_probe_meta = oof_logreg_scores(
         X_hid, y_kept, n_splits=cfg.n_splits, seed=cfg.seed
     )
+    # hid_probe_meta is returned for debugging/inspection (not currently persisted into the manifest here).
     hidden_oof = np.asarray(hidden_oof, dtype=np.float64)
 
-    # Reinflate to full length for consistent downstream JSONL writing and metric masking.
+    # Reinflate to full length so results JSONL and masking logic share the same example index space.
     hidden_oof_full = np.full((len(examples),), np.nan, dtype=np.float64)
     hidden_oof_full[kept_indices] = hidden_oof
     logger.info("Done: Hidden OOF probe (kept=%d/%d)", kept_indices.size, len(examples))
@@ -696,6 +698,7 @@ def main() -> None:
     lntp_delta = bootstrap_auc_diff_with_indices(y, s_lntp, baseline_all, boot_cfg, store_indices=True)
     mtp_delta  = bootstrap_auc_diff_with_indices(y, s_mtp,  baseline_all, boot_cfg, store_indices=True)
     egh_delta  = bootstrap_auc_diff_with_indices(y, s_egh_oof_ge, baseline_all, boot_cfg, store_indices=True)
+    # NOTE: potential issue: egh_delta duplicates egh_ge_delta (same inputs); kept for backward compatibility of stored keys.
     egh_ge_delta = bootstrap_auc_diff_with_indices(y, s_egh_oof_ge, baseline_all, boot_cfg, store_indices=True)
     egh_g_delta  = bootstrap_auc_diff_with_indices(y, s_egh_oof_g,  baseline_all, boot_cfg, store_indices=True)
     egh_e_delta  = bootstrap_auc_diff_with_indices(y, s_egh_oof_e,  baseline_all, boot_cfg, store_indices=True)
@@ -726,7 +729,8 @@ def main() -> None:
 
 
     def _metric_block(scores: np.ndarray, yy: np.ndarray) -> Dict[str, Any]:
-        """Compute AUROC, Spearman rho, and bootstrap CIs (including delta vs random baseline)."""
+        """Compute AUROC, Spearman rho, and bootstrap CI (plus delta AUROC vs constant-random baseline)."""
+        # Invariant: scores and yy must already be aligned and length-matched (masking handled by caller where needed).
         auc = compute_auroc(yy, scores)
         rho = spearman_rho(yy.astype(float), scores.astype(float))
         b = bootstrap_auc(yy, scores, boot_cfg, store_indices=False)
@@ -768,7 +772,7 @@ def main() -> None:
     # ----------------------------
     with cfg.out_jsonl.open("w", encoding="utf-8") as f:
         for i, ex in enumerate(examples):
-            # Invariant: all score arrays are aligned to `examples` order; hidden_probe_oof may be NaN for dropped rows.
+            # Invariant: all non-hidden score arrays are aligned to `examples` order; hidden_probe_oof may be NaN for dropped rows.
             row = {
                 "qid": ex.qid,
                 "task": cfg.task,
@@ -783,6 +787,7 @@ def main() -> None:
                 "egh_kl": float(s_egh_kl[i]),
                 "egh_ce": float(s_egh_ce[i]),
                 "egh_entropy": float(s_egh_entropy[i]),
+                # Key naming: keep both alias and explicit GE key for downstream compatibility.
                 "egh_probe_oof": float(s_egh_oof_ge[i]),
                 "egh_probe_ge": float(s_egh_oof_ge[i]),
                 "egh_probe_g_only": float(s_egh_oof_g[i]),
@@ -824,6 +829,7 @@ def main() -> None:
             "sklearn": sklearn.__version__,
             "numpy": np.__version__,
         },
+        # HiddenFeatureConfig/build_hidden_feature_matrix metadata is persisted for probe auditability.
         "hidden_meta": hidden_meta,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "outputs": {

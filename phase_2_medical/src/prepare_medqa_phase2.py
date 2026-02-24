@@ -1,3 +1,12 @@
+"""
+Deterministically exports a seeded, without-replacement subsample of the MedQA (USMLE 4-option) dataset.
+Inputs: dataset split ("train"|"test"), sample size n, RNG seed, and output file paths.
+Outputs: (1) JSONL of labeled multiple-choice QA examples, (2) JSON list of sampled qids for exact reproducibility.
+Each row includes a stable qid derived from split, original row index, and a content hash of the question text.
+Determinism note: sampling uses Python's random.Random(seed); output order is fixed by sorting sampled indices.
+"""
+
+# phase_2_medical/src/prepare_medqa_phase2.py
 from __future__ import annotations
 
 import argparse
@@ -66,6 +75,7 @@ def export_medqa(
       }
     Also writes sampled qids to JSON list for reproducibility.
     """
+    # NOTE: potential issue: dataset revision is not pinned; upstream updates can change sampled content for same seed.
     ds = load_dataset("GBaker/MedQA-USMLE-4-options")[split]
     n_total = len(ds)
 
