@@ -625,7 +625,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     )
 
     fig.suptitle(title, y=0.99)
-    fig.tight_layout(rect=[0, 0, 1, 0.975])
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
 

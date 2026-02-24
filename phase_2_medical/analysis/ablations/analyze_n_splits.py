@@ -549,7 +549,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.95),
+        bbox_to_anchor=(0.5, 0.975),
         ncol=len(models),
         frameon=False,
         title="Model",
