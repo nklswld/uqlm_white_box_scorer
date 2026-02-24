@@ -103,24 +103,33 @@ def safe_savefig(fig, outpath: Path, **kwargs):
 # ============================================================
 # Helper: labels above bars (no CI)
 # ============================================================
-def add_value_labels(ax, x_positions, y_values, fmt="{:.3f}", fontsize=None):
-    """Annotate bar heights; silently skips missing/NaN values to avoid noisy figure failures."""
+def add_value_labels(ax, x_positions, y_values, fmt="{:.3f}", fontsize=None,
+                     pos_offset=6, neg_offset=-8):
+    """Annotate bar heights; negative values get labels below the bar."""
     if fontsize is None:
         fontsize = VALUE_LABEL_FONTSIZE
 
     for x, y in zip(x_positions, y_values):
-        # Skip invalid values to prevent rendering warnings and misleading labels.
         if y is None or (isinstance(y, float) and np.isnan(y)):
             continue
+
+        y = float(y)
+        if y >= 0:
+            xytext = (0, pos_offset)
+            va = "bottom"
+        else:
+            xytext = (0, neg_offset)
+            va = "top"
+
         ax.annotate(
-            fmt.format(float(y)),
-            (float(x), float(y)),
+            fmt.format(y),
+            (float(x), y),
             textcoords="offset points",
-            xytext=(0, 6),
+            xytext=xytext,
             ha="center",
-            va="bottom",
+            va=va,
             fontsize=fontsize,
-            clip_on=False, 
+            clip_on=False,
         )
 
 

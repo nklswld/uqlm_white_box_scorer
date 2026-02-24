@@ -436,13 +436,21 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
         ax.set_xticks(x)
         ax.set_xticklabels([CAT_PRETTY.get(c, c) for c in CATS], rotation=0, ha="center")
+        ax.margins(x=0.12)
         ax.set_ylim(*y_lim)
-        ax.set_title(TASK_PRETTY.get(task, task))
+        overlay_panel_title_fs = mpl.rcParams["axes.titlesize"] * 0.90
+        ax.set_title(TASK_PRETTY.get(task, task), fontsize=overlay_panel_title_fs)
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.04, fontsize=mpl.rcParams["figure.titlesize"])
+    axes[0].legend(frameon=False, title="Model")
+
+    fig.suptitle(title, y=0.98, fontsize=mpl.rcParams["figure.titlesize"])
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.subplots_adjust(wspace=0.20)
     safe_savefig(fig, outpath, bbox_inches="tight")
+    plt.close(fig)
+    print("Wrote:", outpath)
     plt.close(fig)
     print("Wrote:", outpath)
 

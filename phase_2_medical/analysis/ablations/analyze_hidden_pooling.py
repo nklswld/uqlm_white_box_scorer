@@ -20,7 +20,7 @@ from sklearn.metrics import roc_auc_score
 
 
 # ============================================================
-# Style: EXACTLY consistent with phase2_figures.py  (Fix 1)
+# Style: EXACTLY consistent with phase2_figures.py
 # ============================================================
 FONT_SCALE = 1.5  # Global typography scale (must match phase2_figures.py for visual consistency)
 
@@ -35,7 +35,7 @@ mpl.rcParams.update({
     "ytick.labelsize": int(11 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),
-    "figure.titlesize": int(14.5 * FONT_SCALE),
+    "figure.titlesize": int(16 * FONT_SCALE),
 
     "axes.titlepad": 12,
 

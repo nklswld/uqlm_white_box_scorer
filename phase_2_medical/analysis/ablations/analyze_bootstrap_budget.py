@@ -36,7 +36,7 @@ mpl.rcParams.update({
     "ytick.labelsize": int(11 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),
-    "figure.titlesize": int(14.5 * FONT_SCALE),
+    "figure.titlesize": int(15.5 * FONT_SCALE),
 
     "axes.linewidth": 1.2,
     "xtick.major.width": 1.1,
@@ -470,10 +470,10 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
     # Column selection by metric family (AUROC vs Spearman ρ).
     if metric == "auroc":
         col = "auroc_ci95_halfwidth"
-        ylabel = "95% CI half-width (AUROC)"
+        ylabel = "95% CI half-width\n(AUROC)"
     else:
         col = "spearman_ci95_halfwidth"
-        ylabel = "95% CI half-width (Spearman ρ)"
+        ylabel = "95% CI half-width\n(Spearman ρ)"
 
     # -------- Option A: global tight y-limits (same across panels) --------
     # Design choice: a shared tight y-range enables direct visual comparison across tasks/models.
@@ -553,13 +553,13 @@ def plot_ciwidth(metric: str, title: str, outpath: Path):
     fig.legend(
         handles, labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.972),
+        bbox_to_anchor=(0.5, 0.945),
         ncol=min(4, len(score_order)),
         frameon=False,
         title="Scorer"
     )
-    fig.suptitle(title, y=0.998)
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.91])
     fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
@@ -658,13 +658,13 @@ def plot_delta_ci(metric: str, title: str, outpath: Path):
     fig.legend(
         handles, labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.972),
+        bbox_to_anchor=(0.5, 0.945),
         ncol=min(4, len(score_order)),
         frameon=False,
         title="Scorer"
     )
-    fig.suptitle(title, y=0.998)
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.91])
     fig.subplots_adjust(hspace=0.42)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)

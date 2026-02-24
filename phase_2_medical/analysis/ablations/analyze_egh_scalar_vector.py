@@ -20,7 +20,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Plot style (kept consistent with phase2_figures.py for cross-figure comparability)
 # ============================================================
-FONT_SCALE = 1.5
+FONT_SCALE = 1.3
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -433,7 +433,7 @@ models += sorted([m for m in set(df["model"]) if m not in models])
 def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
                  metric: str, y_lim, title: str, outpath: Path, xtick_rotation=0):
     """Overlay line plots per model with shaded 95% CIs, faceted by task."""
-    fig, axes = plt.subplots(1, len(tasks), figsize=(5.2 * len(tasks), 4.8), sharey=True)
+    fig, axes = plt.subplots(1, len(tasks), figsize=(6.0 * len(tasks), 4.8), sharey=True)
     if len(tasks) == 1:
         axes = [axes]
 
@@ -479,13 +479,12 @@ def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=0.992, fontsize=mpl.rcParams["figure.titlesize"])
-    fig.tight_layout(rect=[0, 0, 1, 0.99])
-    fig.subplots_adjust(wspace=0.28)
+    fig.suptitle(title, y=0.992, fontsize=mpl.rcParams["figure.titlesize"] * 1.15)
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.subplots_adjust(wspace=0.18)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
-
 
 
 def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
@@ -540,7 +539,8 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             yerr_high = hi - y
 
             ax.bar(x, y, width=0.65)
-            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
+            ax.errorbar(x, y, yerr=[yerr_low, yerr_high], fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black", 
+                        elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK)
 
             ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 
@@ -562,11 +562,11 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         f"EGH Scalar vs Vector — "
         f"{'AUROC' if metric == 'auroc' else 'Spearman ρ'} ± 95% CI",
         y=0.97,
-        fontsize=mpl.rcParams["figure.titlesize"] * 1.1,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.15,
     )
 
     fig.tight_layout(rect=[0, 0, 1, 0.975])
-    fig.subplots_adjust(hspace=0.60, wspace=0.12)
+    fig.subplots_adjust(hspace=0.57, wspace=0.12)
 
     safe_savefig(fig, OUT_DIR / f"{outstem}_{metric}_matrix.pdf", bbox_inches="tight")
     plt.close(fig)

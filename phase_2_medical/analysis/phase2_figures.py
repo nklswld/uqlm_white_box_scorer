@@ -479,7 +479,13 @@ df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], 
 def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     """Plot per-run AUROC bars with 95% CIs (sorted by AUROC)."""
     dfp = df_task.copy()
-    dfp["label"] = dfp["model"].str.upper() + " | " + dfp["score"].astype(str).map(pretty_score)
+    dfp["label"] = (
+        dfp["task"].str.upper()
+        + " | "
+        + dfp["model"].str.upper()
+        + " | "
+        + dfp["score"].astype(str).map(pretty_score)
+    )
     dfp = dfp.sort_values("auroc", ascending=False).reset_index(drop=True)
 
     x = np.arange(len(dfp))
@@ -518,7 +524,13 @@ plot_auroc_bar(df_main, "Phase 2 AUROC + 95% CI — all runs (MedQA + PubMedQA s
 def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     """Plot bootstrap-mean Spearman ρ bars with 95% CIs (sorted by bootstrap mean)."""
     dfp = df_task.copy()
-    dfp["label"] = dfp["model"].str.upper() + " | " + dfp["score"].astype(str).map(pretty_score)
+    dfp["label"] = (
+        dfp["task"].str.upper()
+        + " | "
+        + dfp["model"].str.upper()
+        + " | "
+        + dfp["score"].astype(str).map(pretty_score)
+    )
     dfp = dfp.sort_values("spearman_rho_boot_mean", ascending=False).reset_index(drop=True)
 
     x = np.arange(len(dfp))

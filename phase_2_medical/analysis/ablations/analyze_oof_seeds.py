@@ -549,7 +549,7 @@ x = np.arange(len(score_order), dtype=float)
 
 def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     """Plot per-task overlays of mean±std over seeds for the requested metric ('auroc' or 'spearman')."""
-    fig, axes = plt.subplots(1, len(tasks), figsize=(6.6 * len(tasks), 4.8), sharey=True)
+    fig, axes = plt.subplots(1, len(tasks), figsize=(6.0 * len(tasks), 4.8), sharey=True)
     if len(tasks) == 1:
         axes = [axes]
 
@@ -608,6 +608,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
                     ha="center", va=va, fontsize=VALUE_LABEL_FONTSIZE
                 )
 
+        ax.margins(x=0.10)
         ax.axhline(hline, linestyle="--", linewidth=BASELINE_LINEWIDTH)
         ax.set_ylim(*y_lim)
         ax.set_xticks(x)
@@ -624,7 +625,7 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     )
 
     fig.suptitle(title, y=0.99)
-    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.tight_layout(rect=[0, 0, 1, 0.975])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
 
