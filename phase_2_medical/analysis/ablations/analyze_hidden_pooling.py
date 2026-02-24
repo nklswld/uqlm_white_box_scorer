@@ -568,8 +568,8 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=1.06, fontsize=plt.rcParams["figure.titlesize"])
-    fig.subplots_adjust(wspace=0.24)
+    fig.suptitle(title, y=1.04, fontsize=plt.rcParams["figure.titlesize"])
+    fig.subplots_adjust(wspace=0.24, top=0.82)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -650,7 +650,7 @@ def plot_bars_matrix(metric: str, y_lim, outpath: Path):
 
     # Increased vertical spacing improves readability when axis labels are rotated.
     fig.tight_layout(rect=[0, 0, 1, 0.985])
-    fig.subplots_adjust(hspace=0.56, wspace=0.14)
+    fig.subplots_adjust(hspace=0.65, wspace=0.14)
 
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
