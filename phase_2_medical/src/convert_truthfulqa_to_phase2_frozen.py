@@ -17,7 +17,6 @@ IN_PATH = REPO_ROOT / "phase_1_replication" / "benchmarks" / "truthfulqa_hallu_f
 OUT_PATH = ROOT / "outputs" / "frozen" / "truthfulqa_hallu_mistral_like.jsonl"
 
 
-
 if not IN_PATH.exists():
     # Fail fast: input availability is a hard precondition for reproducible conversion runs.
     raise FileNotFoundError(f"Input not found: {IN_PATH}")

@@ -7,10 +7,6 @@ Reproducibility note: if sampling is enabled, callers must set RNG seeds externa
 """
 
 # phase_2_medical/src/generate_frozen_phase2.py
-# Phase-2 generator for frozen evaluation artifacts (PubMedQA, MedQA).
-# Standardized JSONL output with raw generation + constrained prediction.
-# Deterministic by default (greedy decoding).
-
 from __future__ import annotations
 
 import argparse

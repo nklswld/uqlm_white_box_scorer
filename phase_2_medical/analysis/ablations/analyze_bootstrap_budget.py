@@ -7,12 +7,6 @@ Outputs: per-run metric table (CSV), aggregated CI half-width summary (CSV), and
 Reproducibility: CI estimates are deterministic given the stored bootstrap indices and input artifacts.
 """
 
-# ============================================================
-# Bootstrap budget ablation: quantify numerical stability via CI half-width vs B.
-# Discovers run artifacts under outputs/ablations/bootstrap_budget/ and emits CSV + figures
-# using repository-wide Matplotlib style settings.
-# ============================================================
-
 # phase_2_medical/analysis/ablations/analyze_bootstrap_budget.py
 import json
 import re

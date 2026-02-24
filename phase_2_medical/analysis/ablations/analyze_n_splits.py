@@ -6,11 +6,6 @@ Determinism: results are fully deterministic given the stored bootstrap indices 
 """
 
 # phase_2_medical/analysis/ablations/analyze_n_splits.py
-# Ablation: OOF robustness across CV fold counts (n_splits).
-# Expects per-run artifacts: *.manifest.json, corresponding results JSON(L), and *bootstrap_indices*.npz.
-# Folder convention: outputs/ablations/n_splits/<task>_<model>/n_splits_<K>/...
-# IMPORTANT: Styling/structure match phase2_figures.py and other ablation scripts.
-
 import json
 import re
 from pathlib import Path
