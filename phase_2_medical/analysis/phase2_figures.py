@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score
 
 import matplotlib as mpl
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 
 
 FONT_SCALE = 1.5  # Global typography knob; keep fixed for cross-figure comparability in exported PDFs.
@@ -29,7 +31,7 @@ mpl.rcParams.update({
     "font.size": int(12 * FONT_SCALE),
     "axes.titlesize": int(13 * FONT_SCALE),
     "axes.labelsize": int(12 * FONT_SCALE),
-    "xtick.labelsize": int(13 * FONT_SCALE),
+    "xtick.labelsize": int(12 * FONT_SCALE),
     "ytick.labelsize": int(11 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),
@@ -90,6 +92,13 @@ SCORE_PRETTY = {
     "hidden_probe_oof": "Hidden",
 }
 SCORE_ORDER = ["lntp", "mtp", "egh_probe_oof", "hidden_probe_oof"]  # Stable reviewer-facing order in grouped panels.
+
+MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
+
+MODEL_COLOR = {
+    "mistral": "tab:blue",
+    "biomistral": "tab:orange",
+}
 
 # ---------------------------------------------------------------------
 # Robust save helper (handles Windows PDF file locks)
@@ -260,6 +269,42 @@ def pretty_score(score_key: str) -> str:
     k = str(score_key).lower()
     return SCORE_PRETTY.get(k, k)
 
+
+def model_legend_handles():
+    return [
+        Line2D(
+            [0], [0],
+            color=MODEL_COLOR["mistral"],
+            marker="o",
+            linestyle="-",
+            linewidth=2.0,
+            markersize=6.0,
+            label=MODEL_PRETTY.get("mistral", "Mistral"),
+        ),
+        Line2D(
+            [0], [0],
+            color=MODEL_COLOR["biomistral"],
+            marker="o",
+            linestyle="-",
+            linewidth=2.0,
+            markersize=6.0,
+            label=MODEL_PRETTY.get("biomistral", "BioMistral"),
+        ),
+    ]
+
+
+def add_model_legend_between_title_and_plot(fig, ncol=2, y=0.925):
+    fig.legend(
+        handles=model_legend_handles(),
+        title="Model",
+        loc="upper center",
+        bbox_to_anchor=(0.5, y),
+        ncol=ncol,
+        frameon=False,
+        handlelength=2.0,
+        columnspacing=1.4,
+    )
+ 
 # ---------------------------------------------------------------------
 # Value labels (3 decimals) above CI whiskers
 # ---------------------------------------------------------------------
@@ -477,88 +522,131 @@ df_spear_main = df_spear_main.merge(df_spear_ci, on=["task", "model", "score"], 
 # Plot: AUROC bar + CI (labels above CI; errorbars black)
 # ---------------------------------------------------------------------
 def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
-    """Plot per-run AUROC bars with 95% CIs (sorted by AUROC)."""
     dfp = df_task.copy()
-    dfp["label"] = (
-        dfp["task"].str.upper()
-        + " | "
-        + dfp["model"].str.upper()
-        + " | "
-        + dfp["score"].astype(str).map(pretty_score)
-    )
-    dfp = dfp.sort_values("auroc", ascending=False).reset_index(drop=True)
+    dfp["task"] = dfp["task"].astype(str).str.lower()
+    dfp["model"] = dfp["model"].astype(str).str.lower()
+    dfp["score"] = dfp["score"].astype(str).str.lower()
 
-    x = np.arange(len(dfp))
-    yv = dfp["auroc"].values.astype(float)
-    yerr_low = yv - dfp["ci95_lo"].values.astype(float)
-    yerr_high = dfp["ci95_hi"].values.astype(float) - yv
+    multi_task = dfp["task"].nunique() > 1
+    if multi_task:
+        dfp["label"] = dfp["task"].str.upper() + " | " + dfp["score"].map(pretty_score)
+    else:
+        dfp["label"] = dfp["score"].map(pretty_score)
 
-    plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
-    ax = plt.gca()
-    ax.bar(x, yv)
+    dfp = dfp.sort_values("auroc_boot_mean", ascending=False).reset_index(drop=True)
+
+    x = np.arange(len(dfp), dtype=float)
+    yv = dfp["auroc_boot_mean"].to_numpy(dtype=float)
+
+    lo = dfp["ci95_lo"].to_numpy(dtype=float)
+    hi = dfp["ci95_hi"].to_numpy(dtype=float)
+    yerr_low = yv - lo
+    yerr_high = hi - yv
+
+    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+
+    bar_colors = [MODEL_COLOR.get(m, "tab:gray") for m in dfp["model"]]
+    ax.bar(x, yv, width=0.65, color=bar_colors)
     ax.errorbar(
         x, yv, yerr=[yerr_low, yerr_high],
         fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
         elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
     )
-    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Chance baseline for AUROC.
-    ax.set_xticks(x)
-    ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
-    ax.set_ylim(*AUROC_YLIM)  # Fixed y-limits: enables visual comparisons across tasks/models.
-    ax.set_ylabel("AUROC")
-    ax.set_title(title)
 
+    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+    ax.set_ylim(*AUROC_YLIM)
+    ax.set_ylabel("AUROC\n(bootstrap mean)")
+    fig.suptitle(title, y=0.975)
+    add_model_legend_between_title_and_plot(fig, ncol=2, y=0.915)
+
+    ax.set_xticks(x)
+    if multi_task:
+        ax.set_xticklabels(dfp["label"].tolist(), rotation=35, ha="right")
+    else:
+        ax.set_xticklabels(dfp["label"].tolist(), rotation=0, ha="center")
+
+
+    # Value labels
     add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
 
-    plt.tight_layout()
-    safe_savefig(plt.gcf(), outpath)
-    plt.close()
+    # ONE layout + ONE save
+    fig.tight_layout(rect=[0, 0.08, 1, 0.88])
+    safe_savefig(fig, outpath, bbox_inches="tight")
+    plt.close(fig)
 
-for task in df_main["task"].unique():
-    plot_auroc_bar(df_main[df_main["task"] == task], f"Phase 2 AUROC + 95% CI — {task}", FIGS / f"fig_phase2_auroc_bar_{task}.pdf")
-plot_auroc_bar(df_main, "Phase 2 AUROC + 95% CI — all runs (MedQA + PubMedQA shown together)", FIGS / "fig_phase2_auroc_bar_ALL.pdf")
+
+# ---------------------------------------------------------------------
+# AUROC bar plots (single-task + ALL)
+# ---------------------------------------------------------------------
+df_main_filtered = df_main[df_main["score"].isin(MAIN_SCORES)].copy()
+
+for task in df_main_filtered["task"].unique():
+    plot_auroc_bar(
+        df_main_filtered[df_main_filtered["task"] == task],
+        f"Phase 2 AUROC + 95% CI — {task}",
+        FIGS / f"fig_phase2_auroc_bar_{task}.pdf"
+    )
+
+plot_auroc_bar(
+    df_main_filtered,
+    "Phase 2 AUROC + 95% CI — all runs (MedQA + PubMedQA shown together)",
+    FIGS / "fig_phase2_auroc_bar_ALL.pdf"
+)
 
 # ---------------------------------------------------------------------
 # Plot: Spearman bar + CI (labels above CI; errorbars black)
 # ---------------------------------------------------------------------
 def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
-    """Plot bootstrap-mean Spearman ρ bars with 95% CIs (sorted by bootstrap mean)."""
     dfp = df_task.copy()
-    dfp["label"] = (
-        dfp["task"].str.upper()
-        + " | "
-        + dfp["model"].str.upper()
-        + " | "
-        + dfp["score"].astype(str).map(pretty_score)
-    )
+    dfp["task"] = dfp["task"].astype(str).str.lower()
+    dfp["model"] = dfp["model"].astype(str).str.lower()
+    dfp["score"] = dfp["score"].astype(str).str.lower()
+
+    multi_task = dfp["task"].nunique() > 1
+    if multi_task:
+        dfp["label"] = dfp["task"].str.upper() + " | " + dfp["score"].map(pretty_score)
+    else:
+        dfp["label"] = dfp["score"].map(pretty_score)
+
     dfp = dfp.sort_values("spearman_rho_boot_mean", ascending=False).reset_index(drop=True)
 
-    x = np.arange(len(dfp))
-    yv = dfp["spearman_rho_boot_mean"].values.astype(float)
-    yerr_low = yv - dfp["ci95_lo"].values.astype(float)
-    yerr_high = dfp["ci95_hi"].values.astype(float) - yv
+    x = np.arange(len(dfp), dtype=float)
+    yv = dfp["spearman_rho_boot_mean"].to_numpy(dtype=float)
 
-    plt.figure(figsize=(12, max(4, 0.35 * len(dfp))))
-    ax = plt.gca()
-    ax.bar(x, yv)
+    lo = dfp["ci95_lo"].to_numpy(dtype=float)
+    hi = dfp["ci95_hi"].to_numpy(dtype=float)
+    yerr_low = yv - lo
+    yerr_high = hi - yv
+
+    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+
+    bar_colors = [MODEL_COLOR.get(m, "tab:gray") for m in dfp["model"]]
+    ax.bar(x, yv, width=0.65, color=bar_colors)
     ax.errorbar(
         x, yv, yerr=[yerr_low, yerr_high],
         fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
         elinewidth=ERRORBAR_LINEWIDTH, capthick=ERRORBAR_CAPTHICK
     )
-    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Null association baseline for correlation.
-    ax.set_xticks(x)
-    ax.set_xticklabels(dfp["label"].tolist(), rotation=60, ha="right", fontsize=14)
-    ax.set_ylim(*SPEARMAN_YLIM)  # Fixed y-limits: enables visual comparisons across tasks/models.
-    ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
-    ax.set_title(title)
 
+    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+    ax.set_ylim(*SPEARMAN_YLIM)
+    ax.set_ylabel("AUROC\n(bootstrap mean)")
+
+    fig.suptitle(title, y=0.975)
+    add_model_legend_between_title_and_plot(fig, ncol=2, y=0.915)
+
+    # Value labels
     add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
 
-    plt.tight_layout()
-    safe_savefig(plt.gcf(), outpath)
-    plt.close()
+    # Layout + Save (einmal!)
+    fig.tight_layout(rect=[0, 0.08, 1, 0.88])
+    safe_savefig(fig, outpath, bbox_inches="tight")
+    plt.close(fig)
+        
 
+# ---------------------------------------------------------------------
+# Spearman bar plots (single-task + ALL)
+# ---------------------------------------------------------------------
 df_spear_main_filtered = df_spear_main[df_spear_main["score"].isin(MAIN_SCORES)].copy()
 for task in df_spear_main_filtered["task"].unique():
     plot_spearman_bar(
@@ -615,7 +703,7 @@ def plot_auroc_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
                 yerr_low.append(float(r["auroc"]) - float(r["ci95_lo"]))
                 yerr_high.append(float(r["ci95_hi"]) - float(r["auroc"]))
 
-        ax.bar(xs, ys, width=width * 0.95, label=model.upper())
+        ax.bar(xs, ys, width=width * 0.95, color=MODEL_COLOR.get(model, "tab:gray"))
         ax.errorbar(
             xs, ys, yerr=[yerr_low, yerr_high],
             fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
@@ -631,7 +719,13 @@ def plot_auroc_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
     ax.set_ylabel("AUROC")
     ax.set_title(title)
     plt.subplots_adjust(right=0.88)
-    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1))
+    ax.legend(
+        handles=model_legend_handles(),
+        title="Model",
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0)
+    )
 
     plt.tight_layout()
     safe_savefig(plt.gcf(), outpath)
@@ -675,7 +769,7 @@ def plot_spearman_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
                 yerr_low.append(float(r["spearman_rho_boot_mean"]) - float(r["ci95_lo"]))
                 yerr_high.append(float(r["ci95_hi"]) - float(r["spearman_rho_boot_mean"]))
 
-        ax.bar(xs, ys, width=width * 0.95, label=model.upper())
+        ax.bar(xs, ys, width=width * 0.95, color=MODEL_COLOR.get(model, "tab:gray"))
         ax.errorbar(
             xs, ys, yerr=[yerr_low, yerr_high],
             fmt="none", capsize=ERRORBAR_CAPSIZE, ecolor="black",
@@ -691,7 +785,13 @@ def plot_spearman_grouped(df_task: pd.DataFrame, title: str, outpath: Path):
     ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
     ax.set_title(title)
     plt.subplots_adjust(right=0.88)
-    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1))
+    ax.legend(
+        handles=model_legend_handles(),
+        title="Model",
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0)
+    )
 
     plt.tight_layout()
     safe_savefig(plt.gcf(), outpath)
@@ -702,7 +802,7 @@ for task in df_main["task"].unique():
                        f"Phase 2 AUROC + 95% CI (grouped) — {task}",
                        FIGS / f"fig_phase2_auroc_grouped_{task}.pdf")
 plot_auroc_grouped(df_main,
-                   "Phase 2 AUROC + 95% CI (grouped) — all runs (MedQA + PubMedQA shown together)",
+                   "Phase 2 AUROC + 95% CI (grouped) — all runs\n(MedQA + PubMedQA shown together)",
                    FIGS / "fig_phase2_auroc_grouped_ALL.pdf")
 
 for task in df_spear_main_filtered["task"].unique():
@@ -710,7 +810,7 @@ for task in df_spear_main_filtered["task"].unique():
                           f"Phase 2 Spearman ρ + 95% CI (grouped) — {task}",
                           FIGS / f"fig_phase2_spearman_grouped_{task}.pdf")
 plot_spearman_grouped(df_spear_main_filtered,
-                      "Phase 2 Spearman ρ + 95% CI (grouped) — all runs (MedQA + PubMedQA shown together)",
+                      "Phase 2 Spearman ρ + 95% CI (grouped) — all runs\n(MedQA + PubMedQA shown together)",
                       FIGS / "fig_phase2_spearman_grouped_ALL.pdf")
 
 # ======================================================================
@@ -721,7 +821,7 @@ TASK_ORDER_STORY = ["medqa", "pubmedqa"]
 MODEL_ORDER_STORY = ["mistral", "biomistral"]
 
 TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
-MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
+
 
 def _panel_bar(ax, sub, title):
     """Single panel: AUROC bars with 95% CIs for a fixed (task, model)."""
@@ -775,7 +875,7 @@ def _panel_delta(ax, sub, title, y0=-0.05, y1=0.30):
     ax.set_xticklabels([pretty_score(s) for s in SCORE_ORDER], rotation=0, fontsize=14)
     ax.set_ylim(y0, y1)
     ax.set_title(title)
-    ax.set_ylabel("ΔAUROC (vs 0.5)")
+    ax.set_ylabel("ΔAUROC (vs 0.5)", fontsize=ax.xaxis.get_label().get_size())
 
     add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
 
@@ -784,25 +884,25 @@ STORY_DIR.mkdir(parents=True, exist_ok=True)
 
 # (1) 2×2 Grid AUROC
 fig, axes = plt.subplots(2, 2, figsize=(11, 7))
-fig.subplots_adjust(hspace=0.45, wspace=0.25)
+fig.subplots_adjust(hspace=0.45, wspace=0.25, top=0.88)
 for i, task in enumerate(TASK_ORDER_STORY):
     for j, model in enumerate(MODEL_ORDER_STORY):
         ax = axes[i, j]
         sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
         _panel_bar(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
-fig.suptitle("Phase 2: White-box scorers across Task × Model (AUROC ± 95% CI)", y=0.995, fontsize=plt.rcParams["figure.titlesize"])
+fig.suptitle("Phase 2: White-box scorers across Task × Model (AUROC ± 95% CI)", y=1.01, fontsize=plt.rcParams["figure.titlesize"])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_1_grid_task_model_auroc.pdf", bbox_inches="tight")
 plt.close(fig)
 
 # (2) 2×2 Grid ΔAUROC
 fig, axes = plt.subplots(2, 2, figsize=(11, 7))
-fig.subplots_adjust(hspace=0.45, wspace=0.25)
+fig.subplots_adjust(hspace=0.45, wspace=0.25, top=0.88)
 for i, task in enumerate(TASK_ORDER_STORY):
     for j, model in enumerate(MODEL_ORDER_STORY):
         ax = axes[i, j]
         sub = df_main[(df_main["task"] == task) & (df_main["model"] == model)].copy()
         _panel_delta(ax, sub, f"{TASK_PRETTY[task]} — {MODEL_PRETTY[model]}")
-fig.suptitle("Phase 2: Effect size vs random (ΔAUROC ± 95% CI)", y=0.995, fontsize=plt.rcParams["figure.titlesize"])
+fig.suptitle("Phase 2: Effect size vs random (ΔAUROC ± 95% CI)", y=1.01, fontsize=plt.rcParams["figure.titlesize"])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_2_grid_task_model_delta_auroc.pdf", bbox_inches="tight")
 plt.close(fig)
 
@@ -839,9 +939,9 @@ for j, model in enumerate(MODEL_ORDER_STORY):
 
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(np.arange(len(TASK_ORDER_STORY)))
-    ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=int(13 * FONT_SCALE))
+    ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY], rotation=0, fontsize=int(11.5 * FONT_SCALE))
     ax.set_title(MODEL_PRETTY[model])
-    ax.set_ylabel("AUROC")
+    ax.set_ylabel("AUROC", fontsize=int(11.5 * FONT_SCALE))
     ax.set_ylim(*AUROC_YLIM)
 
 axes[0].legend(frameon=False, title="Scorer")
@@ -868,7 +968,7 @@ for task in TASK_ORDER_STORY:
 dd = pd.DataFrame(rows)
 
 # Wider figure to avoid x-label overlap.
-fig, ax = plt.subplots(figsize=(12.5, 5.4), constrained_layout=True)
+fig, ax = plt.subplots(figsize=(10.5, 6.2), constrained_layout=True)
 
 x_labels, vals, err_low, err_high = [], [], [], []
 for task in TASK_ORDER_STORY:

@@ -20,8 +20,8 @@ Prompt template used during generation:
 Question: {question}  
 Answer:
 
-No additional system prompts, role tokens, or trailing whitespace were used.
-Tokenization was performed with add_special_tokens=False.
+No additional system prompts, role tokens, or trailing whitespace were used.  
+Tokenization was performed with `add_special_tokens=False`.
 
 All Phase-1 computations use teacher forcing only.
 
@@ -51,7 +51,7 @@ No other datasets are required.
 - Dependencies installed via:  
   pip install -r requirements.txt  
 
-Tested with GPU and CPU execution.
+Tested with GPU and CPU execution.  
 GPU is recommended for faster hidden-state extraction.
 
 ---
@@ -74,10 +74,13 @@ The script performs:
 - loading frozen TruthfulQA samples  
 - computation of unsupervised white-box scores  
 - extraction of hidden-state features  
-- supervised evaluation using stratified out-of-fold cross-validation  
+- supervised evaluation using 5-fold stratified out-of-fold (OOF) cross-validation  
 - AUROC computation  
 - stratified bootstrap confidence intervals  
 - writing results and a run manifest  
+
+No separate held-out test split is used.  
+All supervised scorers are evaluated on the full dataset using leakage-safe OOF predictions.
 
 ---
 
@@ -92,9 +95,9 @@ If bootstrap delta comparisons are enabled, an additional file is written:
 
 outputs/phase1_run_manifest.bootstrap_indices.npz  
 
-This file contains the exact bootstrap resampling indices used for AUROC difference estimation.
+This file contains the exact bootstrap resampling indices used for AUROC and AUROC difference estimation.
 
-The results file contains one entry per sample with labels and all computed scores.
+The results file contains one entry per sample with labels and all computed scores.  
 The manifest file records configuration, environment details, AUROC values, confidence intervals, and references to stored bootstrap indices.
 
 ---
@@ -117,7 +120,8 @@ All sources of randomness are fixed:
 - cross-validation splits  
 - bootstrap resampling  
 
-Repeated runs produce identical results, including bootstrap confidence intervals, up to floating-point precision.
+Repeated runs produce identical results, including bootstrap confidence intervals, up to floating-point precision.  
+Minor floating-point differences may occur across different hardware architectures (e.g., CPU vs. GPU).
 
 ---
 
@@ -125,12 +129,12 @@ Repeated runs produce identical results, including bootstrap confidence interval
 
 Phase-1 evaluation uses a single fixed model checkpoint for all frozen outputs.
 
-Model parameters remain frozen throughout Phase 1.
+Model parameters remain frozen throughout Phase 1.  
 The exact checkpoint identifier is recorded in the run manifest.
 
 ---
 
 ## Notes
 
-CPU-only execution is slower but yields equivalent results.
+CPU-only execution is slower but yields equivalent results.  
 No external services or APIs are required.

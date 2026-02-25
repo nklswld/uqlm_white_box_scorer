@@ -479,7 +479,7 @@ def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=0.992, fontsize=mpl.rcParams["figure.titlesize"] * 1.15)
+    fig.suptitle(title, y=0.96, fontsize=mpl.rcParams["figure.titlesize"] * 1.15)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     fig.subplots_adjust(wspace=0.18)
     safe_savefig(fig, outpath, bbox_inches="tight")

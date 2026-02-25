@@ -445,8 +445,8 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
     axes[0].legend(frameon=False, title="Model")
     axes[0].legend(frameon=False, title="Model")
 
-    fig.suptitle(title, y=0.98, fontsize=mpl.rcParams["figure.titlesize"])
-    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.suptitle(title, y=0.96, fontsize=mpl.rcParams["figure.titlesize"])
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
     fig.subplots_adjust(wspace=0.20)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
