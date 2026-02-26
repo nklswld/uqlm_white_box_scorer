@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ablation: OOF Robustness – n_splits
-# Vary: --n_splits
-# Fixed: seed, model, frozen inputs, B, hidden settings, etc.
+# -----------------------------------------------------------------------------
+# Ablation runner: OOF robustness to cross-validation granularity (n_splits).
 #
-# Output: outputs/ablations/n_splits/<task>_<model_key>/n_<n_splits>/
+# Key inputs: TASKS × MODEL_KEYS × N_SPLITS_LIST, plus a fixed SEED and bootstrap
+# configuration (B, CI). Uses precomputed "frozen" model inputs to isolate the
+# effect of n_splits from upstream data/model variation.
+#
+# Key outputs: per-run results JSONL + manifest JSON under:
+#   outputs/ablations/n_splits/<task>_<model_key>/n_<n_splits>/
+#
+# Reproducibility: deterministic given identical frozen inputs, SEED, and
+# environment; failures abort immediately due to strict shell options.
+# -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PHASE2_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"     # -> phase_2_medical
@@ -18,45 +26,52 @@ SEED=42
 B=5000
 CI=0.95
 
-# Keep hidden settings fixed (match your default ablations)
+# Keep hidden settings fixed across all runs to attribute differences solely to n_splits.
 HIDDEN_LAYERS="16"
 HIDDEN_POOLING="mean_answer"
 
+# GPU allocator setting for stability on long runs / large models (honors external override).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 TASKS=("medqa" "pubmedqa")
 MODEL_KEYS=("mistral" "biomistral")
 
-# The actual ablation
+# The ablation axis: number of CV splits used for OOF evaluation.
 N_SPLITS_LIST=(3 5 10)
 
 model_name_for_key () {
   case "$1" in
     mistral)    echo "mistralai/Mistral-7B-Instruct-v0.2" ;;
     biomistral) echo "BioMistral/BioMistral-7B" ;;
+    # NOTE: potential issue: unknown MODEL_KEY hard-fails; keep MODEL_KEYS in sync with this mapping.
     *) echo "UNKNOWN" ; exit 1 ;;
   esac
 }
 
 frozen_for () {
   case "$1-$2" in
+    # Convention: frozen JSONL filename is keyed by (task, model_key) to ensure matching inputs.
     medqa-mistral)       echo "medqa_mistral7b.jsonl" ;;
     medqa-biomistral)    echo "medqa_biomistral7b.jsonl" ;;
     pubmedqa-mistral)    echo "pubmedqa_mistral7b.jsonl" ;;
     pubmedqa-biomistral) echo "pubmedqa_biomistral7b.jsonl" ;;
+    # NOTE: potential issue: mismatched (TASK, MODEL_KEY) mapping will silently change the evaluation set.
     *) echo "UNKNOWN" ; exit 1 ;;
   esac
 }
 
 task_params () {
   case "$1" in
+    # Task-specific batching + context length; keep fixed within each task for comparability.
     medqa)    echo "1 1 64" ;;   # BS HBS MAX_CTX_TOK
     pubmedqa) echo "4 4 128" ;;
+    # NOTE: potential issue: unknown TASK hard-fails; keep TASKS in sync with this mapping.
     *) echo "UNKNOWN_TASK" ; exit 1 ;;
   esac
 }
 
 for TASK in "${TASKS[@]}"; do
+  # Invariant: BS/HBS/MAX_CTX_TOK are derived solely from TASK (not model or n_splits).
   read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"
 
   for MODEL_KEY in "${MODEL_KEYS[@]}"; do
@@ -64,12 +79,14 @@ for TASK in "${TASKS[@]}"; do
     FROZEN="$(frozen_for "${TASK}" "${MODEL_KEY}")"
     FROZEN_PATH="${PHASE2_ROOT}/outputs/frozen/${FROZEN}"
 
+    # Hard-stop if the fixed input artifact is missing; without frozen inputs, results are not comparable.
     if [[ ! -f "${FROZEN_PATH}" ]]; then
       echo "[ERROR] Frozen file not found: ${FROZEN_PATH}"
       exit 1
     fi
 
     for NS in "${N_SPLITS_LIST[@]}"; do
+      # Tag encodes the ablation axis (n_splits) and bootstrap size (B) into filenames for traceability.
       TAG="${TASK}_${MODEL_KEY}_nsplits${NS}"
       OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/n_${NS}"
       mkdir -p "${OUT_DIR}"

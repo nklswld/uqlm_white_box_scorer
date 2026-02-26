@@ -2,6 +2,16 @@
 set -euo pipefail
 
 # --------------------------------------------------
+# Hidden-probe ablation runner: vary hidden-state pooling strategy.
+#
+# Inputs: repo-root .env (optional HF token), fixed task/model grids, frozen_jsonl per (task, model),
+#         and fixed evaluation hyperparameters (seed, B, ci, n_splits, hidden_layers).
+# Outputs: per-run results JSONL + manifest JSON under outputs/ablations/hidden_pooling/<task>_<model>/<pool>/.
+# Determinism: intended deterministic given fixed --seed and fixed frozen_jsonl; GPU kernels may still introduce
+#              minor non-determinism depending on PyTorch/CUDA settings and model ops.
+# --------------------------------------------------
+
+# --------------------------------------------------
 # Load HF token from .env (if available)
 # --------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,11 +23,12 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   source "${REPO_ROOT}/.env"
   set +a
 
-  # Ensure both common variable names are set
+  # Ensure both common variable names are set (Hugging Face tooling expects HUGGINGFACE_HUB_TOKEN).
   if [[ -n "${HF_TOKEN:-}" ]]; then
     export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
   fi
 else
+  # NOTE: potential issue: if models are not cached and no token is available, pulls may fail/rate-limit.
   echo "[INFO] No .env found at repo root (continuing without explicit HF token)"
 fi
 
@@ -41,14 +52,14 @@ B=5000
 CI=0.95
 N_SPLITS=5
 
-HIDDEN_LAYERS="16"
+HIDDEN_LAYERS="16"  # Convention: layer indices/ids are passed through verbatim to run_phase2.py.
 
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"  # Heuristic: reduce CUDA OOM via allocator behavior.
 
 # Tasks
 TASKS=("medqa" "pubmedqa")
 
-# Model keys
+# Model keys (lightweight keys used for directory naming + mapping to full HF model ids)
 MODEL_KEYS=("mistral" "biomistral")
 
 # Exakte HF-Modell-IDs
@@ -85,10 +96,10 @@ task_params () {
   esac
 }
 
-POOLS=("mean_answer" "last_answer" "mean_all")
+POOLS=("mean_answer" "last_answer" "mean_all")  # Pooling convention defined/implemented in run_phase2.py.
 
 for TASK in "${TASKS[@]}"; do
-  read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"
+  read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"  # Invariant: exactly three whitespace-separated values.
 
   for MODEL_KEY in "${MODEL_KEYS[@]}"; do
     MODEL_NAME="$(model_name_for_key "${MODEL_KEY}")"
@@ -96,12 +107,13 @@ for TASK in "${TASKS[@]}"; do
 
     FROZEN_PATH="${PHASE2_ROOT}/outputs/frozen/${FROZEN}"
     if [[ ! -f "${FROZEN_PATH}" ]]; then
+      # Hard fail: downstream results would be silently incomparable without the correct frozen predictions.
       echo "[ERROR] Frozen file not found: ${FROZEN_PATH}"
       exit 1
     fi
 
     for P in "${POOLS[@]}"; do
-      TAG="${TASK}_${MODEL_KEY}_pool_${P}"
+      TAG="${TASK}_${MODEL_KEY}_pool_${P}"  # Tag is part of filenames only; directory structure encodes task/model/pool.
       OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/${P}"
       mkdir -p "${OUT_DIR}"
 

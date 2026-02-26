@@ -543,7 +543,10 @@ def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     yerr_low = yv - lo
     yerr_high = hi - yv
 
-    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    n_bars = len(dfp)
+    fig_w = max(9.5, n_bars * 0.78)
+    fig, ax = plt.subplots(figsize=(fig_w, 7.5))
+
 
     bar_colors = [MODEL_COLOR.get(m, "tab:gray") for m in dfp["model"]]
     ax.bar(x, yv, width=0.65, color=bar_colors)
@@ -556,6 +559,7 @@ def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_ylim(*AUROC_YLIM)
     ax.set_ylabel("AUROC\n(bootstrap mean)")
+    ax.yaxis.label.set_size(int(10.5 * FONT_SCALE)) 
     fig.suptitle(title, y=0.975)
     add_model_legend_between_title_and_plot(fig, ncol=2, y=0.915)
 
@@ -564,16 +568,17 @@ def plot_auroc_bar(df_task: pd.DataFrame, title: str, outpath: Path):
         ax.set_xticklabels(dfp["label"].tolist(), rotation=35, ha="right")
     else:
         ax.set_xticklabels(dfp["label"].tolist(), rotation=0, ha="center")
-
+        
+    ax.tick_params(axis="x", labelsize=int(10 * FONT_SCALE))
 
     # Value labels
     add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
 
     # ONE layout + ONE save
-    fig.tight_layout(rect=[0, 0.08, 1, 0.88])
+    fig.tight_layout(rect=[0, 0.12, 1, 0.88])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
-
+    
 
 # ---------------------------------------------------------------------
 # AUROC bar plots (single-task + ALL)
@@ -618,7 +623,10 @@ def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
     yerr_low = yv - lo
     yerr_high = hi - yv
 
-    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    n_bars = len(dfp)
+    fig_w = max(9.5, n_bars * 0.78)
+    fig, ax = plt.subplots(figsize=(fig_w, 7.5))
+
 
     bar_colors = [MODEL_COLOR.get(m, "tab:gray") for m in dfp["model"]]
     ax.bar(x, yv, width=0.65, color=bar_colors)
@@ -630,16 +638,23 @@ def plot_spearman_bar(df_task: pd.DataFrame, title: str, outpath: Path):
 
     ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_ylim(*SPEARMAN_YLIM)
-    ax.set_ylabel("AUROC\n(bootstrap mean)")
+    ax.set_ylabel("Spearman ρ\n(bootstrap mean)")
+    ax.yaxis.label.set_size(int(10.5 * FONT_SCALE)) 
 
     fig.suptitle(title, y=0.975)
     add_model_legend_between_title_and_plot(fig, ncol=2, y=0.915)
-
-    # Value labels
+    
+    ax.set_xticks(x)
+    if multi_task:
+        ax.set_xticklabels(dfp["label"].tolist(), rotation=35, ha="right")
+    else:
+        ax.set_xticklabels(dfp["label"].tolist(), rotation=0, ha="center")
+    
+    ax.tick_params(axis="x", labelsize=int(10 * FONT_SCALE))
+        
     add_value_labels_above_ci(ax, x, yv, yerr_high, fmt="{:.3f}")
 
-    # Layout + Save (einmal!)
-    fig.tight_layout(rect=[0, 0.08, 1, 0.88])
+    fig.tight_layout(rect=[0, 0.12, 1, 0.88])
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
         

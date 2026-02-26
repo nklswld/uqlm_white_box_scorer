@@ -2,6 +2,14 @@
 set -euo pipefail
 
 # --------------------------------------------------
+# Hidden-probe ablation: sweep representation depth (--hidden_layers) for each (task, model).
+# Inputs: repo-root .env (optional HF token), frozen predictions JSONL, task/model/layer sweep config.
+# Outputs: per-layer results JSONL + manifest JSON, written under outputs/ablations/hidden_layers/.
+# Determinism: fixed seed and split count are passed through to the Python runner; bootstrap B is fixed.
+# NOTE: potential issue: this script is Bash despite the "Python code" label; do not run via Python.
+# --------------------------------------------------
+
+# --------------------------------------------------
 # Load HF token from .env (if available)
 # --------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,11 +21,12 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   source "${REPO_ROOT}/.env"
   set +a
 
-  # Ensure both common variable names are set
+  # Canonicalize token name expected by Hugging Face tooling (accept HF_TOKEN as alias).
   if [[ -n "${HF_TOKEN:-}" ]]; then
     export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
   fi
 else
+  # NOTE: continuing without a token may trigger rate limits / gated-model failures at runtime.
   echo "[INFO] No .env found at repo root (continuing without explicit HF token)"
 fi
 
@@ -41,8 +50,10 @@ B=5000
 CI=0.95
 N_SPLITS=5
 
+# Hidden-state pooling strategy used for the probe representation (kept fixed across the sweep).
 HIDDEN_POOLING="mean_answer"
 
+# CUDA allocator hint for long-running inference; reduces fragmentation in some workloads.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # Tasks
@@ -51,7 +62,7 @@ TASKS=("medqa" "pubmedqa")
 # Model keys
 MODEL_KEYS=("mistral" "biomistral")
 
-# Exakte HF-Modell-IDs
+# Map short model keys (used in filenames/paths) to exact Hugging Face model IDs.
 model_name_for_key () {
   case "$1" in
     mistral)    echo "mistralai/Mistral-7B-Instruct-v0.2" ;;
@@ -60,7 +71,8 @@ model_name_for_key () {
   esac
 }
 
-# Frozen-Dateien (outputs/frozen)
+# Frozen evaluation inputs (precomputed model outputs) expected under outputs/frozen/.
+# Invariant: must exist before the sweep; missing files are treated as hard errors.
 frozen_for () {
   case "$1-$2" in
     medqa-mistral)       echo "medqa_mistral7b.jsonl" ;;
@@ -71,7 +83,8 @@ frozen_for () {
   esac
 }
 
-# Task-spezifische Defaults wie in deinen manuellen Runs
+# Task-specific runtime parameters mirroring the manual baseline runs.
+# Convention: echo "<batch_size> <hidden_batch_size> <max_context_tokens>".
 task_params () {
   case "$1" in
     medqa)
@@ -85,10 +98,12 @@ task_params () {
   esac
 }
 
-# Layer Sweep (wie geplant)
+# Layer indices to probe. Assumed valid for all selected model backbones.
+# TODO: verify: requested layers exist for each model; invalid indices may fail inside run_phase2.py.
 LAYERS=(4 16 24 32)
 
 for TASK in "${TASKS[@]}"; do
+  # Parse task defaults into positional variables consumed by the runner CLI.
   read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"
 
   for MODEL_KEY in "${MODEL_KEYS[@]}"; do
@@ -96,6 +111,7 @@ for TASK in "${TASKS[@]}"; do
     FROZEN="$(frozen_for "${TASK}" "${MODEL_KEY}")"
 
     FROZEN_PATH="${PHASE2_ROOT}/outputs/frozen/${FROZEN}"
+    # Hard fail: without the frozen JSONL, results would be incomplete and silently misleading.
     if [[ ! -f "${FROZEN_PATH}" ]]; then
       echo "[ERROR] Frozen file not found: ${FROZEN_PATH}"
       exit 1
@@ -106,6 +122,7 @@ for TASK in "${TASKS[@]}"; do
       OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/layer_${L}"
       mkdir -p "${OUT_DIR}"
 
+      # Deterministic run configuration is entirely controlled via CLI flags passed through here.
       python "${RUN}" \
         --task "${TASK}" \
         --frozen_jsonl "${FROZEN_PATH}" \
