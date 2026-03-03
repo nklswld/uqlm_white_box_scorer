@@ -352,9 +352,7 @@ def compute_egh_primitives_for_qa(
                 emb_diff = float(torch.norm(h_c_ans - h_u_ans, dim=-1).mean().item())
 
                 # Fixed-size vector: mean over answer tokens to (H,), enabling downstream linear probes / aggregation.
-                delta = (h_c_ans - h_u_ans).float()
-                e_vec = delta.mean(dim=1).squeeze(0)
-
+                e_vec = (h_c_ans - h_u_ans).mean(dim=1).squeeze(0)   # shape (H,)
 
             # Detach conditional logits: gradients should flow only through unconditional embeddings for "G".
             logits_c_det = logits_c.detach()
@@ -427,13 +425,12 @@ def compute_egh_primitives_for_qa(
             g_vec = torch.zeros((0,), device=llm.input_device)
         else:
             grad_ans = emb_u.grad[:, ans_start : ans_start + Lg, :]  # (1, Lg, H)
-            grad_ans_f = grad_ans.float()
             
             # Scalar diagnostic: mean tokenwise gradient L2 norm (embedding space).
-            grad_norm = float(grad_ans_f.norm(dim=-1).mean().item())
+            grad_norm = float(grad_ans.norm(dim=-1).mean().item())
 
             # Fixed-size vector: mean over answer tokens to (H,), matching e_vec dimensionality.
-            g_vec = grad_ans_f.mean(dim=1).squeeze(0)  # shape (H,)
+            g_vec = grad_ans.mean(dim=1).squeeze(0)  # shape (H,)
 
         return {
             "d_loss": float(d_loss),
