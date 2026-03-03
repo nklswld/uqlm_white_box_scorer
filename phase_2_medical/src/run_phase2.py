@@ -634,11 +634,6 @@ def main() -> None:
     
     g = np.asarray(s_egh_oof_g, dtype=np.float64)
 
-    print("G-only stats:")
-    print("min:", float(np.min(g)))
-    print("max:", float(np.max(g)))
-    print("std:", float(np.std(g)))
-
     try:
         assert_scores_ok("EGH_probe_g_only", g)
     except ValueError as e:
