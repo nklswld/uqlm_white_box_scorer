@@ -2,23 +2,20 @@
 set -euo pipefail
 
 # --------------------------------------------------
-# OOF seed ablation runner (Phase 2, medical tasks)
+# Hidden-probe ablation runner: vary hidden-state pooling strategy.
 #
-# Runs out-of-fold (OOF) robustness experiments by varying only --seed while
-# keeping frozen inputs, model choice, bootstrap settings (B, ci), and CV
-# settings (n_splits) fixed. Reads optional HF credentials from repo-root .env.
-#
-# Key inputs: frozen JSONL under outputs/frozen/, TASKS, MODEL_KEYS, SEEDS, and
-# run_phase2.py. Key outputs: per-seed results/manifest under outputs/ablations/
-# oof_seeds/<task>_<model_key>/seed_<seed>/. Determinism: controlled via --seed
-# and fixed frozen inputs; assumes downstream code is seed-respecting.
+# Inputs: repo-root .env (optional HF token), fixed task/model grids, frozen_jsonl per (task, model),
+#         and fixed evaluation hyperparameters (seed, B, ci, n_splits, hidden_layers).
+# Outputs: per-run results JSONL + manifest JSON under outputs/ablations/hidden_pooling/<task>_<model>/<pool>/.
+# Determinism: intended deterministic given fixed --seed and fixed frozen_jsonl; GPU kernels may still introduce
+#              minor non-determinism depending on PyTorch/CUDA settings and model ops.
 # --------------------------------------------------
 
 # --------------------------------------------------
 # Load HF token from .env (if available)
 # --------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [[ -f "${REPO_ROOT}/.env" ]]; then
   echo "[INFO] Loading HF token from .env"
@@ -26,56 +23,46 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   source "${REPO_ROOT}/.env"
   set +a
 
-  # Accept both conventions: HF_TOKEN (repo) and HUGGINGFACE_HUB_TOKEN (HF SDK).
+  # Ensure both common variable names are set (Hugging Face tooling expects HUGGINGFACE_HUB_TOKEN).
   if [[ -n "${HF_TOKEN:-}" ]]; then
     export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
   fi
 else
-  # NOTE: potential issue: private/gated HF models will fail without a valid token.
+  # NOTE: potential issue: if models are not cached and no token is available, pulls may fail/rate-limit.
   echo "[INFO] No .env found at repo root (continuing without explicit HF token)"
 fi
 
 
-# Ablation: OOF Robustness – Seeds
-# Vary: --seed
-# Fixed: everything else (including frozen inputs, model, B, n_splits, hidden settings)
+# Ablation: Hidden Probe – Pooling Strategy
+# Vary: --hidden_pooling  (expected: mean_answer, last_answer, mean_all)
+# Fixed: hidden_layers, model, frozen, B, seed, n_splits
 #
-# Output: ablations/oof_seeds/<task>_<model_key>/seed_<seed>/
+# Output: outputs/ablations/hidden_pooling/<task>_<model>/<pool>/
 
 # Robust path resolution (independent of where the script is invoked from)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PHASE2_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"     # -> phase_2_medical
-REPO_ROOT="$(cd "${PHASE2_ROOT}/.." && pwd)"           # -> repo root
+PHASE2_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"           # -> phase_2_medical
 
 RUN="${PHASE2_ROOT}/src/run_phase2.py"
-OUT_ROOT="${PHASE2_ROOT}/outputs/ablations/oof_seeds"
+OUT_ROOT="${PHASE2_ROOT}/outputs/ablations/hidden_pooling"
 mkdir -p "${OUT_ROOT}"
 
-# Optional debug info for reproducible runs/log provenance.
-echo "[INFO] PHASE2_ROOT=${PHASE2_ROOT}"
-echo "[INFO] Using frozen dir: ${PHASE2_ROOT}/outputs/frozen"
-
+SEED=42
 B=5000
 CI=0.95
 N_SPLITS=5
 
-# Hidden-state extraction settings forwarded to run_phase2.py.
-HIDDEN_LAYERS="16"
-HIDDEN_POOLING="mean_answer"
+HIDDEN_LAYERS="16"  # Convention: layer indices/ids are passed through verbatim to run_phase2.py.
 
-# Avoid CUDA allocator fragmentation OOMs for long-running batched inference.
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"  # Heuristic: reduce CUDA OOM via allocator behavior.
 
 # Tasks
 TASKS=("medqa" "pubmedqa")
 
-# Model keys
+# Model keys (lightweight keys used for directory naming + mapping to full HF model ids)
 MODEL_KEYS=("mistral" "biomistral")
 
-# Seeds to test; expanded to probe sensitivity rather than maximize coverage.
-SEEDS=(0 42 123 999 2026)
-
-# Map short model keys to canonical HF model IDs (single source of truth).
+# Exakte HF-Modell-IDs
 model_name_for_key () {
   case "$1" in
     mistral)    echo "mistralai/Mistral-7B-Instruct-v0.2" ;;
@@ -84,8 +71,7 @@ model_name_for_key () {
   esac
 }
 
-# Resolve the exact frozen JSONL name per (task, model_key).
-# Invariant: these files must be identical across seeds for a fair ablation.
+# Frozen-Dateien (outputs/frozen)
 frozen_for () {
   case "$1-$2" in
     medqa-mistral)       echo "medqa_mistral7b.jsonl" ;;
@@ -96,7 +82,7 @@ frozen_for () {
   esac
 }
 
-# Task-specific runtime defaults, aligned with prior manual runs for comparability.
+# Task-spezifische Defaults wie in deinen manuellen Runs
 task_params () {
   case "$1" in
     medqa)
@@ -110,27 +96,27 @@ task_params () {
   esac
 }
 
+POOLS=("mean_answer" "last_answer" "mean_all")  # Pooling convention defined/implemented in run_phase2.py.
+
 for TASK in "${TASKS[@]}"; do
-  read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"
+  read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"  # Invariant: exactly three whitespace-separated values.
 
   for MODEL_KEY in "${MODEL_KEYS[@]}"; do
     MODEL_NAME="$(model_name_for_key "${MODEL_KEY}")"
     FROZEN="$(frozen_for "${TASK}" "${MODEL_KEY}")"
 
     FROZEN_PATH="${PHASE2_ROOT}/outputs/frozen/${FROZEN}"
-
-    # Fail fast: missing frozen inputs would silently invalidate the ablation.
     if [[ ! -f "${FROZEN_PATH}" ]]; then
+      # Hard fail: downstream results would be silently incomparable without the correct frozen predictions.
       echo "[ERROR] Frozen file not found: ${FROZEN_PATH}"
       exit 1
     fi
 
-    for SEED in "${SEEDS[@]}"; do
-      TAG="${TASK}_${MODEL_KEY}_seed${SEED}"
-      OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/seed_${SEED}"
+    for P in "${POOLS[@]}"; do
+      TAG="${TASK}_${MODEL_KEY}_pool_${P}"  # Tag is part of filenames only; directory structure encodes task/model/pool.
+      OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/${P}"
       mkdir -p "${OUT_DIR}"
 
-      # Invariant: only --seed changes across runs; all other knobs are fixed.
       python "${RUN}" \
         --task "${TASK}" \
         --frozen_jsonl "${FROZEN_PATH}" \
@@ -146,12 +132,12 @@ for TASK in "${TASKS[@]}"; do
         --batch_size "${BS}" \
         --hidden_batch_size "${HBS}" \
         --hidden_layers ${HIDDEN_LAYERS} \
-        --hidden_pooling "${HIDDEN_POOLING}" \
+        --hidden_pooling "${P}" \
         --max_context_tokens "${MAX_CTX_TOK}"
     done
 
-    echo "[OK] Finished: ${TASK} × ${MODEL_KEY} (seeds: ${SEEDS[*]}). Outputs in: ${OUT_ROOT}/${TASK}_${MODEL_KEY}/"
+    echo "[OK] Hidden pooling ablation finished for: ${TASK} × ${MODEL_KEY}. Outputs in: ${OUT_ROOT}/${TASK}_${MODEL_KEY}/"
   done
 done
 
-echo "[OK] OOF seed ablation finished. Outputs root: ${OUT_ROOT}"
+echo "[OK] Hidden pooling ablation finished. Outputs root: ${OUT_ROOT}"

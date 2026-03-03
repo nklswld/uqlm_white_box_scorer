@@ -2,18 +2,23 @@
 set -euo pipefail
 
 # --------------------------------------------------
-# Hidden-probe ablation: sweep representation depth (--hidden_layers) for each (task, model).
-# Inputs: repo-root .env (optional HF token), frozen predictions JSONL, task/model/layer sweep config.
-# Outputs: per-layer results JSONL + manifest JSON, written under outputs/ablations/hidden_layers/.
-# Determinism: fixed seed and split count are passed through to the Python runner; bootstrap B is fixed.
-# NOTE: potential issue: this script is Bash despite the "Python code" label; do not run via Python.
+# OOF seed ablation runner (Phase 2, medical tasks)
+#
+# Runs out-of-fold (OOF) robustness experiments by varying only --seed while
+# keeping frozen inputs, model choice, bootstrap settings (B, ci), and CV
+# settings (n_splits) fixed. Reads optional HF credentials from repo-root .env.
+#
+# Key inputs: frozen JSONL under outputs/frozen/, TASKS, MODEL_KEYS, SEEDS, and
+# run_phase2.py. Key outputs: per-seed results/manifest under outputs/ablations/
+# oof_seeds/<task>_<model_key>/seed_<seed>/. Determinism: controlled via --seed
+# and fixed frozen inputs; assumes downstream code is seed-respecting.
 # --------------------------------------------------
 
 # --------------------------------------------------
 # Load HF token from .env (if available)
 # --------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [[ -f "${REPO_ROOT}/.env" ]]; then
   echo "[INFO] Loading HF token from .env"
@@ -21,39 +26,44 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   source "${REPO_ROOT}/.env"
   set +a
 
-  # Canonicalize token name expected by Hugging Face tooling (accept HF_TOKEN as alias).
+  # Accept both conventions: HF_TOKEN (repo) and HUGGINGFACE_HUB_TOKEN (HF SDK).
   if [[ -n "${HF_TOKEN:-}" ]]; then
     export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
   fi
 else
-  # NOTE: continuing without a token may trigger rate limits / gated-model failures at runtime.
+  # NOTE: potential issue: private/gated HF models will fail without a valid token.
   echo "[INFO] No .env found at repo root (continuing without explicit HF token)"
 fi
 
 
-# Ablation: Hidden Probe – Layer Sweep
-# Vary: --hidden_layers
-# Fixed: pooling, normalize, model, frozen, B, seed, n_splits
+# Ablation: OOF Robustness – Seeds
+# Vary: --seed
+# Fixed: everything else (including frozen inputs, model, B, n_splits, hidden settings)
 #
-# Output: outputs/ablations/hidden_layers/<task>_<model>/layer_<L>/
+# Output: ablations/oof_seeds/<task>_<model_key>/seed_<seed>/
 
 # Robust path resolution (independent of where the script is invoked from)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PHASE2_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"     # -> phase_2_medical
+PHASE2_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"           # -> phase_2_medical
+REPO_ROOT="$(cd "${PHASE2_ROOT}/.." && pwd)"           # -> repo root
 
 RUN="${PHASE2_ROOT}/src/run_phase2.py"
-OUT_ROOT="${PHASE2_ROOT}/outputs/ablations/hidden_layers"
+OUT_ROOT="${PHASE2_ROOT}/outputs/ablations/oof_seeds"
 mkdir -p "${OUT_ROOT}"
 
-SEED=42
+# Optional debug info for reproducible runs/log provenance.
+echo "[INFO] PHASE2_ROOT=${PHASE2_ROOT}"
+echo "[INFO] Using frozen dir: ${PHASE2_ROOT}/outputs/frozen"
+
 B=5000
 CI=0.95
 N_SPLITS=5
 
-# Hidden-state pooling strategy used for the probe representation (kept fixed across the sweep).
+# Hidden-state extraction settings forwarded to run_phase2.py.
+HIDDEN_LAYERS="16"
 HIDDEN_POOLING="mean_answer"
 
-# CUDA allocator hint for long-running inference; reduces fragmentation in some workloads.
+# Avoid CUDA allocator fragmentation OOMs for long-running batched inference.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # Tasks
@@ -62,7 +72,10 @@ TASKS=("medqa" "pubmedqa")
 # Model keys
 MODEL_KEYS=("mistral" "biomistral")
 
-# Map short model keys (used in filenames/paths) to exact Hugging Face model IDs.
+# Seeds to test; expanded to probe sensitivity rather than maximize coverage.
+SEEDS=(0 42 123 999 2026)
+
+# Map short model keys to canonical HF model IDs (single source of truth).
 model_name_for_key () {
   case "$1" in
     mistral)    echo "mistralai/Mistral-7B-Instruct-v0.2" ;;
@@ -71,8 +84,8 @@ model_name_for_key () {
   esac
 }
 
-# Frozen evaluation inputs (precomputed model outputs) expected under outputs/frozen/.
-# Invariant: must exist before the sweep; missing files are treated as hard errors.
+# Resolve the exact frozen JSONL name per (task, model_key).
+# Invariant: these files must be identical across seeds for a fair ablation.
 frozen_for () {
   case "$1-$2" in
     medqa-mistral)       echo "medqa_mistral7b.jsonl" ;;
@@ -83,8 +96,7 @@ frozen_for () {
   esac
 }
 
-# Task-specific runtime parameters mirroring the manual baseline runs.
-# Convention: echo "<batch_size> <hidden_batch_size> <max_context_tokens>".
+# Task-specific runtime defaults, aligned with prior manual runs for comparability.
 task_params () {
   case "$1" in
     medqa)
@@ -98,12 +110,7 @@ task_params () {
   esac
 }
 
-# Layer indices to probe. Assumed valid for all selected model backbones.
-# TODO: verify: requested layers exist for each model; invalid indices may fail inside run_phase2.py.
-LAYERS=(4 16 24 32)
-
 for TASK in "${TASKS[@]}"; do
-  # Parse task defaults into positional variables consumed by the runner CLI.
   read -r BS HBS MAX_CTX_TOK <<<"$(task_params "${TASK}")"
 
   for MODEL_KEY in "${MODEL_KEYS[@]}"; do
@@ -111,18 +118,19 @@ for TASK in "${TASKS[@]}"; do
     FROZEN="$(frozen_for "${TASK}" "${MODEL_KEY}")"
 
     FROZEN_PATH="${PHASE2_ROOT}/outputs/frozen/${FROZEN}"
-    # Hard fail: without the frozen JSONL, results would be incomplete and silently misleading.
+
+    # Fail fast: missing frozen inputs would silently invalidate the ablation.
     if [[ ! -f "${FROZEN_PATH}" ]]; then
       echo "[ERROR] Frozen file not found: ${FROZEN_PATH}"
       exit 1
     fi
 
-    for L in "${LAYERS[@]}"; do
-      TAG="${TASK}_${MODEL_KEY}_layer${L}"
-      OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/layer_${L}"
+    for SEED in "${SEEDS[@]}"; do
+      TAG="${TASK}_${MODEL_KEY}_seed${SEED}"
+      OUT_DIR="${OUT_ROOT}/${TASK}_${MODEL_KEY}/seed_${SEED}"
       mkdir -p "${OUT_DIR}"
 
-      # Deterministic run configuration is entirely controlled via CLI flags passed through here.
+      # Invariant: only --seed changes across runs; all other knobs are fixed.
       python "${RUN}" \
         --task "${TASK}" \
         --frozen_jsonl "${FROZEN_PATH}" \
@@ -137,13 +145,13 @@ for TASK in "${TASKS[@]}"; do
         --ci "${CI}" \
         --batch_size "${BS}" \
         --hidden_batch_size "${HBS}" \
-        --hidden_layers "${L}" \
+        --hidden_layers ${HIDDEN_LAYERS} \
         --hidden_pooling "${HIDDEN_POOLING}" \
         --max_context_tokens "${MAX_CTX_TOK}"
     done
 
-    echo "[OK] Hidden layer sweep finished for: ${TASK} × ${MODEL_KEY}. Outputs in: ${OUT_ROOT}/${TASK}_${MODEL_KEY}/"
+    echo "[OK] Finished: ${TASK} × ${MODEL_KEY} (seeds: ${SEEDS[*]}). Outputs in: ${OUT_ROOT}/${TASK}_${MODEL_KEY}/"
   done
 done
 
-echo "[OK] Hidden layer sweep finished. Outputs root: ${OUT_ROOT}"
+echo "[OK] OOF seed ablation finished. Outputs root: ${OUT_ROOT}"

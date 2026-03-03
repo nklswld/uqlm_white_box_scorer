@@ -13,7 +13,7 @@ set -euo pipefail  # Fail fast on errors, unset vars, and pipeline failures (avo
 # Load HF token from .env (if available)
 # --------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [[ -f "${REPO_ROOT}/.env" ]]; then
   echo "[INFO] Loading HF token from .env"
@@ -43,7 +43,7 @@ fi
 
 # Resolve paths relative to this script to avoid dependence on the current working directory.
 # Anchor on phase_2_medical directory relative to this script (scripts may be invoked from anywhere).
-PHASE2_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PHASE2_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${PHASE2_DIR}/.." && pwd)"
 
 
@@ -78,13 +78,13 @@ python "${SRC}" \
   --model_name "mistralai/Mistral-7B-Instruct-v0.2" \
   --device "cuda:0" \
   --dtype "bfloat16" \
-  --B 5000 \  # Bootstrap/resampling budget (B); impacts CI stability and runtime.
-  --batch_size 4 \  # Runtime batch size; tuned per task to fit GPU memory.
-  --hidden_batch_size 4 \  # Internal batching (if supported by SRC); keep aligned with batch_size unless justified.
-  --max_context_tokens 128 \  # Task-specific context cap; too small may truncate prompts and change metrics.
-  --seed 42 \  # Fixed RNG seed for reproducible resampling/splitting (subject to backend determinism).
-  --n_splits 5 \  # Cross-validation / split count used by SRC (assumed); affects variance estimates.
-  --ci 0.95  # Confidence level for intervals produced by SRC.
+  --B 5000 \
+  --batch_size 1 \
+  --hidden_batch_size 1 \
+  --max_context_tokens 128 \
+  --seed 42 \
+  --n_splits 5 \
+  --ci 0.95
 
 echo
 
@@ -101,12 +101,12 @@ python "${SRC}" \
   --device "cuda:0" \
   --dtype "bfloat16" \
   --B 5000 \
-  --batch_size 1 \  # NOTE: potential issue: batch_size=1 may be required for memory, but can reduce throughput.
+  --batch_size 1 \
   --hidden_batch_size 1 \
-  --max_context_tokens 64 \  # MedQA prompts often shorter here; truncation risk remains if upstream formatting changes.
+  --max_context_tokens 64 \
   --seed 42 \
   --n_splits 5 \
-  --ci 0.95 
+  --ci 0.95
 
 echo
 
@@ -124,8 +124,8 @@ python "${SRC}" \
   --device "cuda:0" \
   --dtype "bfloat16" \
   --B 5000 \
-  --batch_size 4 \
-  --hidden_batch_size 4 \
+  --batch_size 1 \
+  --hidden_batch_size 1 \
   --max_context_tokens 128 \
   --seed 42 \
   --n_splits 5 \

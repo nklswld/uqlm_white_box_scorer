@@ -616,8 +616,6 @@ def main() -> None:
     s_egh_oof_scalar, egh_meta_scalar = oof_logreg_scores(X_egh_scalar, y, n_splits=cfg.n_splits, seed=cfg.seed)
     s_egh_oof_scalar = np.asarray(s_egh_oof_scalar, dtype=np.float64)
 
-    logger.info("Done: EGH OOF probes (GE + G-only + E-only + scalar-only)")
-
 
     # Sanity Checks
     def assert_scores_ok(name, s):

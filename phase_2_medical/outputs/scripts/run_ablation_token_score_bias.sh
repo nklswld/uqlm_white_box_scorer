@@ -12,7 +12,7 @@ set -euo pipefail
 
 # Load HF token from .env (if available) so model downloads/authenticated pulls work without manual export.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [[ -f "${REPO_ROOT}/.env" ]]; then
   echo "[INFO] Loading HF token from .env"
@@ -43,7 +43,7 @@ fi
 
 # Robust path resolution (independent of where the script is invoked from).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PHASE2_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"     # -> phase_2_medical
+PHASE2_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"           # -> phase_2_medical
 
 # Runner + I/O: keep paths explicit to avoid accidental cross-phase writes.
 RUN="${PHASE2_ROOT}/src/run_token_bias_lntp_mtp.py"

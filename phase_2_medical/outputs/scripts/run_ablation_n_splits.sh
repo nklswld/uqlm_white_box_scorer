@@ -16,7 +16,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PHASE2_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"     # -> phase_2_medical
+PHASE2_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"           # -> phase_2_medical
 
 RUN="${PHASE2_ROOT}/src/run_phase2.py"
 OUT_ROOT="${PHASE2_ROOT}/outputs/ablations/n_splits"
