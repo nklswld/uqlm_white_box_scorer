@@ -85,3 +85,10 @@ python phase_2_medical/src/run_phase2.py \
   --batch_size 4 \
   --hidden_batch_size 4 \
   --max_context_tokens 128
+
+
+
+
+  ODER 
+
+  bash phase_2_medical\scripts\run_*
