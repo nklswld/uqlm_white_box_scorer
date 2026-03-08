@@ -79,8 +79,8 @@ python "${SRC}" \
   --device "cuda:0" \
   --dtype "bfloat16" \
   --B 5000 \
-  --batch_size 1 \
-  --hidden_batch_size 1 \
+  --batch_size 4 \
+  --hidden_batch_size 4 \
   --max_context_tokens 128 \
   --seed 42 \
   --n_splits 5 \
@@ -124,8 +124,8 @@ python "${SRC}" \
   --device "cuda:0" \
   --dtype "bfloat16" \
   --B 5000 \
-  --batch_size 1 \
-  --hidden_batch_size 1 \
+  --batch_size 4 \
+  --hidden_batch_size 4 \
   --max_context_tokens 128 \
   --seed 42 \
   --n_splits 5 \
