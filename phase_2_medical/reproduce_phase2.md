@@ -2,93 +2,233 @@
 
 ## Purpose
 
-This document describes how to reproduce all Phase-2 results in this repository.
+This document provides the exact procedure to reproduce all Phase-2 medical QA scoring artifacts, metrics, and downstream analysis outputs from this repository.
 
-Phase 2 evaluates the generalization of white-box hallucination detection signals to constrained
-medical question answering tasks.
-All experiments operate exclusively on frozen model outputs and are fully deterministic.
-
-No text generation, sampling, fine-tuning, or labeling is performed during reproduction.
+Phase 2 evaluates whether white-box uncertainty/hallucination signals from Phase 1 generalize to constrained medical QA tasks under a frozen-output protocol.
 
 ---
 
-## Frozen Outputs
+## Reproduction Scope
 
-Phase-2 experiments rely exclusively on frozen model output files generated once and never modified.
+Phase 2 reproduction includes:
 
-All white-box scores are computed from these frozen outputs.
-No score-specific filtering or resampling is performed.
+- baseline scorer runs (MedQA/PubMedQA × Mistral/BioMistral)
+- manifests and bootstrap index artifacts
+- deterministic table/figure generation
+- optional ablation runs
 
-All Phase-2 computations use teacher forcing only.
+Phase 2 reproduction does **not** include:
+
+- model fine-tuning
+- calibration pipelines
+- generation-time mitigation/intervention methods
 
 ---
 
-## Datasets
+## Canonical Artifact Rule
 
-Required files:
+For reported baseline results, canonical artifacts are:
 
-benchmarks/medqa_test_labeled_seed42_n1000.jsonl  
-benchmarks/pubmedqa_labeled_phase2.jsonl  
+- `phase_2_medical/outputs/final/*.results.jsonl`
+- `phase_2_medical/outputs/final/*.manifest.json`
+- `phase_2_medical/outputs/final/*.manifest.bootstrap_indices.npz`
 
-Each line in the dataset files is a JSON object containing:
+If these files already exist and match expected naming, they are the source of truth for analysis reproduction.
 
-- qid: unique question identifier  
-- question: medical question text  
-- answer options or context (task-dependent)  
-- model_answer: model-selected answer  
-- error: binary correctness label (0 = correct, 1 = incorrect)  
+---
 
-No other datasets are required.
+## Required Inputs
+
+### Required for baseline scoring and analysis
+
+Frozen prediction files:
+
+- `phase_2_medical/outputs/frozen/medqa_mistral7b.jsonl`
+- `phase_2_medical/outputs/frozen/medqa_biomistral7b.jsonl`
+- `phase_2_medical/outputs/frozen/pubmedqa_mistral7b.jsonl`
+- `phase_2_medical/outputs/frozen/pubmedqa_biomistral7b.jsonl`
+
+### Required only if regenerating frozen outputs
+
+Prepared benchmark files:
+
+- `phase_2_medical/benchmarks/medqa_test_labeled_seed42_n1000.jsonl`
+- `phase_2_medical/benchmarks/pubmedqa_labeled_phase2.jsonl`
 
 ---
 
 ## Environment
 
-- Python >= 3.10  
-- Dependencies installed via:  
-  pip install -r requirements.txt  
+Minimum:
 
-Tested with GPU execution.
-GPU is required for gradient- and hidden-state-based white-box score extraction.
-
----
-
-## Reproduction
-
-Verify repository structure:
-
-phase_2_medical/  
-- src/  
-- benchmarks/  
-- outputs/  
-- analysis/  
-
-Phase 2 results are produced by running the scoring script on frozen model outputs.
-Each run generates one results file and one manifest file.
-
-The following commands reproduce the final Phase-2 outputs used for all analyses and figures.
-
----
-
-### Mistral × PubMedQA
+- Python `>= 3.10`
+- Dependencies from repo root:
 
 ```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+pip install -r requirements.txt
+```
 
+Execution assumptions:
+
+- GPU is recommended/expected for gradient + hidden feature extraction.
+- Hugging Face access token may be required depending on model availability.
+
+Optional `.env` in repo root:
+
+```bash
+HF_TOKEN=...
+```
+
+Some runner scripts map `HF_TOKEN` to `HUGGINGFACE_HUB_TOKEN`.
+
+---
+
+## Determinism Notes
+
+The pipeline is designed for high reproducibility via:
+
+- frozen input predictions
+- fixed seeds in baseline configurations
+- serialized bootstrap indices per run
+- deterministic analysis scripts over archived artifacts
+
+Practical note:
+
+- very small floating-point deviations may occur across runtime/library/hardware environments.
+- canonical reported outputs are defined by archived files under `outputs/final/`.
+
+---
+
+## Baseline Reproduction (Recommended Path)
+
+Run all 4 baseline conditions with the maintained script:
+
+```bash
+bash phase_2_medical/scripts/run_baseline_all.sh
+```
+
+This script executes:
+
+1. Mistral × PubMedQA
+2. Mistral × MedQA
+3. BioMistral × PubMedQA
+4. BioMistral × MedQA
+
+with fixed baseline settings (including task-specific token budgets).
+
+Expected output files:
+
+- `phase_2_medical/outputs/final/pubmedqa_mistral.B5000.results.jsonl`
+- `phase_2_medical/outputs/final/pubmedqa_mistral.B5000.manifest.json`
+- `phase_2_medical/outputs/final/pubmedqa_mistral.B5000.manifest.bootstrap_indices.npz`
+- `phase_2_medical/outputs/final/medqa_mistral.B5000.results.jsonl`
+- `phase_2_medical/outputs/final/medqa_mistral.B5000.manifest.json`
+- `phase_2_medical/outputs/final/medqa_mistral.B5000.manifest.bootstrap_indices.npz`
+- `phase_2_medical/outputs/final/pubmedqa_biomistral.B5000.results.jsonl`
+- `phase_2_medical/outputs/final/pubmedqa_biomistral.B5000.manifest.json`
+- `phase_2_medical/outputs/final/pubmedqa_biomistral.B5000.manifest.bootstrap_indices.npz`
+- `phase_2_medical/outputs/final/medqa_biomistral.B5000.results.jsonl`
+- `phase_2_medical/outputs/final/medqa_biomistral.B5000.manifest.json`
+- `phase_2_medical/outputs/final/medqa_biomistral.B5000.manifest.bootstrap_indices.npz`
+
+---
+
+## Direct CLI Reproduction (Single Run Example)
+
+If you want one run directly via Python:
+
+```bash
 python phase_2_medical/src/run_phase2.py \
   --task pubmedqa \
   --frozen_jsonl phase_2_medical/outputs/frozen/pubmedqa_mistral7b.jsonl \
   --out_jsonl phase_2_medical/outputs/final/pubmedqa_mistral.B5000.results.jsonl \
   --out_manifest phase_2_medical/outputs/final/pubmedqa_mistral.B5000.manifest.json \
   --model_name mistralai/Mistral-7B-Instruct-v0.2 \
+  --device cuda:0 \
+  --dtype bfloat16 \
+  --seed 42 \
+  --n_splits 5 \
   --B 5000 \
+  --ci 0.95 \
   --batch_size 4 \
   --hidden_batch_size 4 \
   --max_context_tokens 128
+```
 
+For baseline comparability, prefer the script values in `run_baseline_all.sh`.
 
+---
 
+## Analysis Reproduction
 
-  ODER 
+After baseline outputs are present:
 
-  bash phase_2_medical\scripts\run_*
+```bash
+python phase_2_medical/analysis/phase2_tables.py
+python phase_2_medical/analysis/phase2_figures.py
+```
+
+Expected output roots:
+
+- Tables: `phase_2_medical/outputs/figures_tables/tables_general/`
+- Figures: `phase_2_medical/outputs/figures_tables/figures_general/`
+
+---
+
+## Optional Ablation Reproduction
+
+Available ablation runners:
+
+- `phase_2_medical/scripts/run_ablation_oof_seeds.sh`
+- `phase_2_medical/scripts/run_ablation_n_splits.sh`
+- `phase_2_medical/scripts/run_ablation_bootstrap_budget.sh`
+- `phase_2_medical/scripts/run_ablation_hidden_layers.sh`
+- `phase_2_medical/scripts/run_ablation_hidden_pooling.sh`
+- `phase_2_medical/scripts/run_ablation_token_score_bias.sh`
+
+Run example:
+
+```bash
+bash phase_2_medical/scripts/run_ablation_oof_seeds.sh
+```
+
+Ablation outputs are written under `phase_2_medical/outputs/ablations/`.
+
+Note:
+
+- `run_ablation_token_score_bias.sh` uses the frozen TruthfulQA artifact (`outputs/frozen/truthfulqa_hallu_mistral_like.jsonl`) for methodological appendix analysis, not the medical baseline benchmark pair.
+
+---
+
+## Validation Checklist
+
+After reproduction, validate:
+
+1. each baseline run has `results + manifest + bootstrap_indices`
+2. manifest `task/model/config` matches intended run
+3. `hidden_coverage.coverage` is reported (baseline should be full coverage in released artifacts)
+4. final metric CSVs are generated:
+   - `phase2_metrics_auroc_ci.csv`
+   - `phase2_metrics_spearman_rho.csv`
+5. expected figure/table PDFs/CSVs exist in `outputs/figures_tables/`
+
+---
+
+## Common Pitfalls
+
+- Missing HF auth for model loading
+- Running from wrong working directory
+- Overwriting previously archived outputs unintentionally
+- Mixing environments (library versions) and expecting bit-identical probe scores
+
+---
+
+## Data and Schema References
+
+For benchmark/frozen/result schema details, see:
+
+- `phase_2_medical/DATA.md`
+
+For high-level project overview, see:
+
+- `phase_2_medical/README.md`

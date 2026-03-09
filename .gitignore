@@ -1,14 +1,10 @@
-# ==================================================
-# Python
-# ==================================================
+# Python cache / bytecode
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
 
-# HF Token
+# Local secrets
 .env
 
-# Numpy compressed arrays
+# Large binary artifacts
+# (bootstrap index files etc. can become very large)
 *.npz

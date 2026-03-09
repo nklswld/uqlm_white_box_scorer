@@ -1,174 +1,177 @@
-# White-Box Hallucination Detection for Large Language Models
+# White-Box Hallucination Detection for Large Language Models (Phase 2)
 
-This repository contains the complete, reproducible implementation of Phase 2 of the master’s thesis
-“White-Box Scores for Uncertainty Quantification and Hallucination Detection in Large Language Models”.
+This directory contains the complete implementation of **Phase 2** of the master’s thesis  
+**“White-Box Scores for Uncertainty Quantification and Hallucination Detection in Large Language Models.”**
 
-Phase 2 investigates whether white-box hallucination signals validated in Phase 1 generalize to
-constrained medical question answering tasks.
-In contrast to Phase 1, which focuses on free-form responses, Phase 2 evaluates hallucination detection
-in multiple-choice and short-answer medical QA settings.
+Phase 2 evaluates whether white-box hallucination/uncertainty signals validated in Phase 1
+generalize to constrained medical QA tasks.
 
 ---
 
 ## Research Objective
 
-The objective of Phase 2 is to study the robustness and transferability of white-box hallucination
-signals across domains and task formats.
+The objective of Phase 2 is to assess robustness and transferability of white-box signals across:
 
-Hallucination detection is formulated as binary classification:
+- task formats (multiple-choice vs constrained short-answer),
+- datasets (MedQA vs PubMedQA),
+- and model families (Mistral vs BioMistral).
 
-- error = 1: the model-selected answer is incorrect  
-- error = 0: the model-selected answer is correct  
+Hallucination detection is operationalized as binary error detection:
 
-All methods are evaluated using AUROC as the primary performance metric.
-Spearman rank correlation is reported as a complementary signal-quality measure.
+- `error = 1`: model-selected answer is incorrect
+- `error = 0`: model-selected answer is correct
+
+Primary metric: **AUROC**  
+Secondary metric: **Spearman’s rho**
 
 ---
 
 ## Methods and Signals
 
-Phase 2 evaluates the probe-based and aggregated white-box scorers validated in Phase 1.
+Phase 2 evaluates the following scorers:
 
-Implemented scorers include:
+- **LNTP** (Length-Normalized Token Probability)
+- **MTP** (Minimum Token Probability)
+- **EGH probe (OOF)**
+- **Hidden-state probe (OOF)**
 
-- LNTP (Length-Normalized Token Probability)  
-- MTP (Minimum Token Probability)  
-- EGH probe (out-of-fold)  
-- hidden-state probe (out-of-fold)  
+Notes:
 
-Individual EGH primitives are not evaluated separately in Phase 2, as Phase 1 already established
-the superiority of supervised probe-based aggregation.
-
-Logit-based scores are treated as ranking signals for error detection and not as calibrated
-uncertainty estimates.
-
-All supervised scorers are evaluated using leakage-safe out-of-fold predictions.
+- Logit-based scores are treated as ranking signals (not calibrated probabilities).
+- Supervised probes are evaluated via out-of-fold predictions to avoid leakage.
+- Score orientation is checked before metric reporting for consistent interpretation.
 
 ---
 
-## Replication Scope
+## Canonical Artifacts (Source of Truth)
 
-Phase 2 does not introduce new scoring mechanisms.
-Instead, it evaluates whether the hallucination signals established in Phase 1 generalize to
-medical question answering tasks under a unified evaluation protocol.
+The reported Phase-2 results are anchored to archived artifacts in `outputs/final/`:
 
-Not in scope for Phase 2:
+- `*.results.jsonl`
+- `*.manifest.json`
+- `*.manifest.bootstrap_indices.npz`
 
-- calibration or probabilistic uncertainty estimation  
-- fine-tuning or domain adaptation  
-- hallucination mitigation or intervention strategies  
+These are the canonical evaluation artifacts used for all reported tables/figures.
 
 ---
 
 ## Datasets and Frozen Evaluation Setup
 
-Evaluation is performed on frozen subsets of two medical QA benchmarks:
+Phase 2 uses frozen subsets of:
 
-- MedQA (USMLE-style multiple-choice questions)  
-- PubMedQA (biomedical yes/no questions)  
+- **MedQA** (USMLE-style multiple-choice)
+- **PubMedQA** (biomedical yes/no/maybe)
 
 For each dataset:
 
-- a fixed subset of 1,000 examples is selected  
-- labels and model outputs are frozen prior to evaluation  
-- no dataset-specific tuning is performed  
+- fixed subset size: `N = 1000`
+- frozen labels and frozen model outputs
+- no dataset-specific tuning during evaluation
 
-Frozen evaluation files are stored in:
-
-benchmarks/medqa_test_labeled_seed42_n1000.jsonl  
-benchmarks/pubmedqa_labeled_phase2.jsonl  
-
-These files serve as the single source of truth for Phase 2.
+Benchmark files and schema details are documented in [`DATA.md`](./DATA.md).
 
 ---
 
 ## Models
 
-Phase 2 evaluates two instruction-tuned 7B models:
+Phase 2 evaluates two 7B instruction-tuned models:
 
-- Mistral-7B-Instruct v0.2  
-- BioMistral-7B  
+- `mistralai/Mistral-7B-Instruct-v0.2`
+- `BioMistral/BioMistral-7B`
 
-Model outputs are generated once and reused unchanged across all scorers.
-No generation-time sampling or uncertainty estimation is performed during evaluation.
+Model outputs are generated once and reused unchanged for scoring and analysis.
 
 ---
 
 ## Evaluation Protocol
 
-Phase 2 follows a conservative and fully reproducible evaluation protocol:
+Phase 2 follows a controlled post-hoc protocol:
 
-- fixed global random seed (42)  
-- frozen datasets and model outputs  
-- no score-specific filtering  
-- AUROC as the primary metric  
-- Spearman rank correlation as a secondary metric  
-- stratified bootstrap confidence intervals (B = 5000)  
+- fixed global seed (`42`) for default runs
+- frozen-output regime
+- teacher-forced white-box extraction on frozen prompt-answer pairs
+- stratified bootstrap confidence intervals (`B = 5000`)
+- serialized bootstrap indices for auditability and CI regeneration
 
-Bootstrap resampling indices are generated once per run and stored in the corresponding manifest
-files to ensure exact reproducibility across all analyses.
+Token-budget constraints are fixed in baseline runs (task-specific settings; see
+[`reproduce_phase2.md`](./reproduce_phase2.md)).
+
+---
+
+## Reproduction
+
+For complete, step-by-step reproduction (exact commands, parameters, paths), see:
+
+- [`reproduce_phase2.md`](./reproduce_phase2.md)
+
+Quick entry points:
+
+Run baseline experiments:
+```bash
+bash phase_2_medical/scripts/run_baseline_all.sh
+```
+
+Generate tables and figures:
+```bash
+python phase_2_medical/analysis/phase2_tables.py
+python phase_2_medical/analysis/phase2_figures.py
+```
 
 ---
 
 ## Analysis and Visualization
 
-Final metrics, confidence intervals, tables, and figures are generated using deterministic scripts:
+Main analysis scripts:
 
-analysis/phase2_figures.py  
-analysis/phase2_tables.py  
+- `analysis/phase2_tables.py`
+- `analysis/phase2_figures.py`
 
-Primary visualizations include grouped bar plots comparing scorers across models,
-with numeric value annotations for all reported metrics.
+Outputs are written to:
 
----
+- `outputs/figures_tables/tables_general/`
+- `outputs/figures_tables/figures_general/`
 
-## Reproducibility
-
-Phase 2 is fully reproducible using frozen inputs and deterministic scripts.
-
-Run scoring:
-
-python src/run_phase2.py  
-
-Run analysis and figure generation:
-
-python analysis/phase2_figures.py  
-python analysis/phase2_tables.py  
-
-All evaluation artifacts, including bootstrap indices, are written to disk for full auditability.
+Ablation outputs are stored under `outputs/ablations/`.
 
 ---
 
-## Repository Structure
+## Repository Structure (Phase 2)
 
-benchmarks/  
-Frozen medical QA datasets and labels  
+- `benchmarks/`  
+  Frozen benchmark subsets and labels
 
-src/  
-Data preparation and scoring pipeline  
+- `src/`  
+  Data preparation, frozen-generation, and scoring pipeline
 
-outputs/  
-Final results, manifests, bootstrap indices, and figures  
+- `scripts/`  
+  Reproducible shell entrypoints (baseline and ablations)
 
-analysis/  
-Deterministic evaluation, tables, and figure generation  
+- `analysis/`  
+  Deterministic table/figure generation and metric aggregation
+
+- `outputs/`  
+  Final artifacts, manifests, bootstrap indices, ablation outputs, figures/tables
+
+- `reproduce_phase2.md`  
+  Full reproduction instructions
+
+- `DATA.md`  
+  Dataset/schema documentation
 
 ---
 
 ## Scope and Limitations
 
-Phase 2 evaluates hallucination detection in constrained medical QA settings.
-Hallucination is operationalized as incorrect answer selection and does not cover free-form
-hallucination generation.
+Phase 2 evaluates hallucination detection as incorrect answer selection in constrained medical QA.
+It does **not** model free-form hallucination generation.
 
-Token-based uncertainty measures may be disadvantaged in short-answer or multiple-choice formats.
-
-Results are intended to assess generalization of hallucination signals rather than to establish
-domain-specific performance claims.
+Results should be interpreted as evidence of discriminative separability under the frozen-output,
+task-constrained regime (not as calibrated uncertainty estimation or intervention performance).
 
 ---
 
 ## License and Usage
 
 This repository is intended for academic and research use.
-Users are responsible for complying with the licenses of external datasets and model checkpoints.
+
+Users are responsible for compliance with licenses of external datasets and model checkpoints.

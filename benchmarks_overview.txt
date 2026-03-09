@@ -1,19 +1,89 @@
-# Benchmarks Overview – UQLM Master Thesis (Niklas Wild)
+# Benchmarks Overview - UQLM Master Thesis
 
-**Zweck:** Übersicht aller verwendeten medizinischen Benchmarks zur Evaluierung von Uncertainty Quantification in Large Language Models.
-
----
-
-## Medizinische Benchmarks
-
-| Benchmark | Quelle | Ziel / Unsicherheitsfokus |
-|:--|:--|:--|
-| MedQA (USMLE) | https://huggingface.co/datasets/medmcqa | Faktische Vorhersageunsicherheit bei medizinischen Entscheidungsfragen |
-| PubMedQA | https://huggingface.co/datasets/pubmed_qa | Epistemische Unsicherheit bei wissenschaftlicher Evidenz (Yes/No/Maybe) |
+Purpose:
+Project-wide overview of all benchmark datasets used in this repository
+(Phase 1 + Phase 2), including source, role in the pipeline, and local
+canonical artifacts.
 
 ---
 
-**Hinweis:**  
-Die Datensätze werden automatisch über Hugging Face geladen und im lokalen Cache unter  
-`C:\Users\Niklas\.cache\huggingface\datasets` gespeichert.  
-Evaluationsergebnisse werden in `/results/` abgelegt.
+## 1) TruthfulQA (Phase 1 core benchmark)
+
+- Source:
+  - https://huggingface.co/datasets/truthful_qa
+- Repository role:
+  - Main benchmark for Phase 1 replication (hallucinated vs non-hallucinated).
+- Canonical local artifacts:
+  - phase_1_replication/benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl
+  - phase_1_replication/benchmarks/truthfulqa_simplified.json
+- Notes:
+  - Phase 1 evaluation runs on frozen model outputs (post-hoc scoring).
+  - A derived TruthfulQA-shaped file is also used in one Phase-2 ablation path:
+    - phase_2_medical/outputs/frozen/truthfulqa_hallu_mistral_like.jsonl
+
+---
+
+## 2) MedQA-USMLE-4-options (Phase 2 medical benchmark)
+
+- Source:
+  - https://huggingface.co/datasets/GBaker/MedQA-USMLE-4-options
+- Repository role:
+  - Phase 2 constrained medical multiple-choice benchmark.
+- Preparation script:
+  - phase_2_medical/src/prepare_medqa_phase2.py
+- Canonical prepared artifact:
+  - phase_2_medical/benchmarks/medqa_test_labeled_seed42_n1000.jsonl
+  - phase_2_medical/benchmarks/medqa_test_qids_seed42_n1000.json
+- Notes:
+  - Seeded, without-replacement subsample from MedQA test split (default n=1000, seed=42).
+  - Used to generate frozen prediction files for Phase 2 scoring.
+
+---
+
+## 3) PubMedQA (pqa_labeled) (Phase 2 medical benchmark)
+
+- Source:
+  - https://huggingface.co/datasets/qiaojin/PubMedQA
+- Repository role:
+  - Phase 2 constrained medical yes/no/maybe benchmark.
+- Preparation script:
+  - phase_2_medical/src/prepare_pubmedqa_phase2.py
+- Canonical prepared artifact:
+  - phase_2_medical/benchmarks/pubmedqa_labeled_phase2.jsonl
+- Notes:
+  - Default export split in script: train (for pqa_labeled).
+  - Gold labels are normalized to {yes, no, maybe}.
+
+---
+
+## Frozen prediction artifacts (not raw benchmarks, but evaluation inputs)
+
+Phase 2 baseline scoring consumes frozen model outputs from:
+
+- phase_2_medical/outputs/frozen/medqa_mistral7b.jsonl
+- phase_2_medical/outputs/frozen/medqa_biomistral7b.jsonl
+- phase_2_medical/outputs/frozen/pubmedqa_mistral7b.jsonl
+- phase_2_medical/outputs/frozen/pubmedqa_biomistral7b.jsonl
+
+These are generated with:
+
+- phase_2_medical/src/generate_frozen_phase2.py
+
+---
+
+## Canonical result artifacts for reported numbers
+
+For thesis-level reported Phase-2 baseline numbers, canonical outputs are:
+
+- phase_2_medical/outputs/final/*.results.jsonl
+- phase_2_medical/outputs/final/*.manifest.json
+- phase_2_medical/outputs/final/*.manifest.bootstrap_indices.npz
+
+---
+
+## Practical data location note
+
+When running preparation scripts, Hugging Face datasets are downloaded to the
+local HF cache (platform-dependent; typically under the user cache directory).
+Prepared benchmark files and frozen artifacts in this repository should be
+treated as the reproducibility anchors for this project.
