@@ -166,9 +166,14 @@ General notes:
 
 The repository was validated in a research setting with:
 
-- Python `>= 3.10`
+- Python >= 3.10
 - dependencies from `requirements.txt`
-- GPU-backed execution for compute-intensive scoring steps (recommended)
+- GPU-backed execution for compute-intensive scoring steps
+
+Reference hardware used for main experiment runs:
+
+- NVIDIA **A100 SXM (80 GB VRAM)** GPU via **RunPod**
+- ~16 vCPU / ~117 GB RAM environment
 
 Important notes:
 
@@ -186,6 +191,15 @@ This repository is designed primarily as a research artifact archive, not as a l
 - Re-running selected experiments is possible with the provided scripts.
 - A full end-to-end rerun is computationally expensive and is not the default verification path.
 - Depending on hardware, model access, and environment, a complete rerun can take many hours.
+
+---
+
+## Compute and Runtime Note
+
+- **Artifact-first verification is recommended**: validate reported results from archived outputs before attempting reruns.
+- **Partial analysis regeneration** (tables/figures from archived artifacts) is typically quick on standard CPU setups.
+- **Full end-to-end reruns are compute-intensive** and may take several hours (often up to ~10+ hours), depending on GPU/VM, model access, and I/O performance.
+- For heavy scoring stages, a GPU-backed environment is strongly recommended.
 
 ---
 
