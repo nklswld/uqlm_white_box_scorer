@@ -199,7 +199,7 @@ This repository is designed primarily as a research artifact archive, not as a l
 - **Artifact-first verification is recommended**: validate reported results from archived outputs before attempting reruns.
 - **Partial analysis regeneration** (tables/figures from archived artifacts) is typically quick on standard CPU setups.
 - **Full end-to-end reruns are compute-intensive** and may take several hours (often up to ~10+ hours), depending on GPU/VM, model access, and I/O performance.
-- For heavy scoring stages, a GPU-backed environment is strongly recommended.
+- For heavy scoring stages, a GPU-backed environment is strongly recommended. Typical full reruns on the reference environment (NVIDIA A100 80 GB GPU) may take roughly ~6–10 hours depending on model access latency and I/O performance.
 
 ---
 
@@ -211,7 +211,7 @@ Implication:
 - The repository contains the code and documented artifact structure,
   but some large intermediate or audit files may not be present in a fresh clone.
 
-If needed for review or audit, these files can be provided separately or regenerated where supported by the documented pipeline.
+If needed for review or audit, these files are available in the accompanying submission archive or can be regenerated where supported by the documented pipeline.
 
 ---
 

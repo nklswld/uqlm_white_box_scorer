@@ -4,15 +4,18 @@ title: "White-Box Hallucination Detection and Uncertainty Scoring in LLMs"
 type: software
 version: "1.0.0"
 date-released: 2026-03-09
+
 authors:
   - family-names: "Wild"
     given-names: "Niklas"
+
 abstract: >
   Reproducible research artifact for a master's thesis on white-box scoring methods
   for hallucination detection and uncertainty-related ranking in large language models.
   The repository contains two experimental phases: (1) controlled replication on TruthfulQA
   and (2) transfer evaluation on constrained medical QA (MedQA, PubMedQA), including
   frozen artifacts, manifests, and analysis scripts.
+
 keywords:
   - hallucination detection
   - uncertainty quantification
@@ -21,5 +24,7 @@ keywords:
   - medqa
   - pubmedqa
   - reproducibility
-license: "CC-BY-NC-4.0"
-repository-code: "https://github.com/nklswld/uqlm_white_box_scorer"
+
+license: CC-BY-NC-4.0
+
+url: https://github.com/nklswld/uqlm_white_box_scorer
