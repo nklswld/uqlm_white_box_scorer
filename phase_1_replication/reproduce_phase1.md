@@ -45,14 +45,46 @@ No other datasets are required.
 
 ---
 
+## Inter-Annotator Agreement (IAA) Verification
+
+Phase 1 includes a consistency check between two annotation rounds performed by the same annotator.
+
+The IAA statistics reported in the thesis are computed from the following files:
+
+benchmarks/self_iaa_round2_labels_seed42_n80.jsonl  
+benchmarks/self_iaa_round2_qids_seed42_n80.json  
+
+To recompute the agreement statistics and regenerate the summary artifact:
+
+```bash
+cd phase_1_replication
+python src/self_iaa_compute.py
+```
+
+This produces:
+
+outputs/self_iaa_summary.json
+
+The file contains:
+
+- percent agreement  
+- Cohen’s κ  
+- bootstrap confidence interval  
+- confusion matrix
+
+---
+
 ## Environment
 
 - Python >= 3.10  
 - Dependencies installed via:  
   pip install -r requirements.txt  
 
-Tested with GPU and CPU execution.  
-GPU is recommended for faster hidden-state extraction.
+Tested with GPU and CPU execution.
+
+GPU is recommended for faster hidden-state extraction.  
+Running hidden-state feature extraction for 7B-scale models typically requires a GPU with **≥24GB VRAM**.  
+Reference experiments were executed on an **NVIDIA A100 (80GB)**.
 
 ---
 
@@ -67,6 +99,7 @@ phase_1_replication/
 
 Run Phase-1 evaluation:
 
+cd phase_1_replication
 python src/run_phase1_truthfulqa.py
 
 The script performs:
@@ -96,6 +129,8 @@ If bootstrap delta comparisons are enabled, an additional file is written:
 outputs/phase1_run_manifest.bootstrap_indices.npz  
 
 This file contains the exact bootstrap resampling indices used for AUROC and AUROC difference estimation.
+
+Note: Phase-1 bootstrap index files are not tracked in Git. Exact CI replay therefore requires the local artifact bundle used during the original run.
 
 The results file contains one entry per sample with labels and all computed scores.  
 The manifest file records configuration, environment details, AUROC values, confidence intervals, and references to stored bootstrap indices.

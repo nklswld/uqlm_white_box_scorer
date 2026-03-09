@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this repository, please cite it using the metadata below."
-title: "White-Box Hallucination Detection and Uncertainty Scoring in LLMs"
+title: "White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models"
 type: software
 version: "1.0.0"
 date-released: 2026-03-09

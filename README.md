@@ -1,4 +1,4 @@
-# White-Box Hallucination Detection and Uncertainty Scoring in LLMs
+# White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models
 
 This repository contains the full implementation used in a master’s thesis:
 
@@ -50,7 +50,7 @@ Out of scope:
 For a fast and correct understanding order:
 
 1. `ARTIFACT_MANIFEST.md`
-2. `benchmarks_overview.txt`
+2. `benchmarks_overview.md`
 3. `phase_1_replication/README.md`
 4. `phase_1_replication/reproduce_phase1.md`
 5. `phase_2_medical/README.md`
@@ -131,7 +131,7 @@ If exact CI index replay is required, use the provided artifact bundle/local arc
 - `phase_2_medical/`  
   Phase-2 medical QA pipeline, frozen predictions, analysis scripts, ablations
 
-- `benchmarks_overview.txt`  
+- `benchmarks_overview.md`  
   Benchmark-level overview across phases
 
 - `ARTIFACT_MANIFEST.md`  
@@ -212,6 +212,8 @@ Implication:
   but some large intermediate or audit files may not be present in a fresh clone.
 
 If needed for review or audit, these files are available in the accompanying submission archive or can be regenerated where supported by the documented pipeline.
+
+The `.npz` files referenced by the canonical artifacts are included in the accompanying thesis submission archive.
 
 ---
 

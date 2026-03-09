@@ -150,9 +150,9 @@ def main() -> None:
         "positive_agreement_class_1": p_pos,
         "negative_agreement_class_0": p_neg,
         "paths": {
-            "round1_labels_embedded_in": str(R1_PATH),
-            "round2_labels": str(R2_PATH),
-            "qids_freeze": str(QIDS_PATH),
+            "round1_labels_embedded_in": str(R1_PATH.relative_to(REPO_ROOT)),
+            "round2_labels": str(R2_PATH.relative_to(REPO_ROOT)),
+            "qids_freeze": str(QIDS_PATH.relative_to(REPO_ROOT)),
         },
     }
 

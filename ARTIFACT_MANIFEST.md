@@ -63,6 +63,7 @@ These files are the primary source of truth for thesis-relevant reported outputs
 ### Final outputs
 - `phase_1_replication/outputs/phase1_truthfulqa_hallu_results_300.jsonl`
 - `phase_1_replication/outputs/phase1_run_manifest.json`
+  - Note: this manifest is relatively large because bootstrap samples and index matrices are serialized directly in JSON. The corresponding bootstrap indices are also stored in compressed form in `phase1_run_manifest.bootstrap_indices.npz`.
 - `phase_1_replication/outputs/self_iaa_summary.json`
 - `phase_1_replication/outputs/figs/*.pdf` (figure set)
 

@@ -15,6 +15,8 @@ import numpy as np
 import json
 from sklearn.metrics import roc_auc_score
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 # ----------------------------
 # Paths
@@ -456,9 +458,9 @@ def generate_phase2_metric_csvs(final_dir: Path, out_dir: Path):
                 "auroc_boot_mean": float(mean_b),
                 "ci95_lo": float(lo),
                 "ci95_hi": float(hi),
-                "manifest_file": str(manifest_path),
-                "results_file": str(results_path),
-                "boot_file": str(boot_path),
+                "manifest_file": manifest_path.relative_to(REPO_ROOT).as_posix(),
+                "results_file": results_path.relative_to(REPO_ROOT).as_posix(),
+                "boot_file": boot_path.relative_to(REPO_ROOT).as_posix(),
             })
 
     if len(records) == 0:

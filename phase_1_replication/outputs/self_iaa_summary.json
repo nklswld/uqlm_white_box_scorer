@@ -22,8 +22,8 @@
   "positive_agreement_class_1": 0.925,
   "negative_agreement_class_0": 0.925,
   "paths": {
-    "round1_labels_embedded_in": "C:\\Users\\nikla\\Desktop\\Peojekt\\uqlm_white_box_scorer\\uqlm_white_box_scorer\\phase_1_replication\\benchmarks\\truthfulqa_hallu_frozen_model_outputs_300.jsonl",
-    "round2_labels": "C:\\Users\\nikla\\Desktop\\Peojekt\\uqlm_white_box_scorer\\uqlm_white_box_scorer\\phase_1_replication\\benchmarks\\self_iaa_round2_labels_seed42_n80.jsonl",
-    "qids_freeze": "C:\\Users\\nikla\\Desktop\\Peojekt\\uqlm_white_box_scorer\\uqlm_white_box_scorer\\phase_1_replication\\benchmarks\\self_iaa_round2_qids_seed42_n80.json"
+    "round1_labels_embedded_in": "benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl",
+    "round2_labels": "benchmarks/self_iaa_round2_labels_seed42_n80.jsonl",
+    "qids_freeze": "benchmarks/self_iaa_round2_qids_seed42_n80.json"
   }
 }
