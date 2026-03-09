@@ -1,4 +1,4 @@
-﻿# White-Box Hallucination Detection for Large Language Models
+﻿# White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models (Phase 1)
 
 This repository contains the complete, reproducible implementation of Phase 1 of the master’s thesis  
 “White-Box Scores for Uncertainty Quantification and Hallucination Detection in Large Language Models”.

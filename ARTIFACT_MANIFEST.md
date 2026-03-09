@@ -190,7 +190,7 @@ Reference links:
 ## 7) Related Documentation
 
 - Root overview: `README.md`
-- Benchmark summary: `benchmarks_overview.txt`
+- Benchmark summary: `benchmarks_overview.md`
 - Phase 1:
   - `phase_1_replication/README.md`
   - `phase_1_replication/DATA.md`
