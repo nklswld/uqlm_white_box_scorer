@@ -1,4 +1,4 @@
-# Phase 1 Data Documentation (`phase_1_medical/DATA.md`)
+# Phase 1 Data Documentation (`phase_1_replication/DATA.md`)
 
 This repository contains the complete, reproducible implementation of Phase 1 of the master’s thesis  
 “White-Box Scores for Uncertainty Quantification and Hallucination Detection in Large Language Models”.

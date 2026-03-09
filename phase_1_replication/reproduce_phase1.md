@@ -130,7 +130,7 @@ outputs/phase1_run_manifest.bootstrap_indices.npz
 
 This file contains the exact bootstrap resampling indices used for AUROC and AUROC difference estimation.
 
-Note: Phase-1 bootstrap index files are not tracked in Git. Exact CI replay therefore requires the local artifact bundle used during the original run.
+Note: Phase-1 bootstrap index files are not tracked in Git. Exact CI replay therefore requires the local artifact bundle used during the original run. The corresponding `.npz` files are included in the accompanying thesis submission archive.
 
 Note: For the archived thesis results, the canonical Phase-1 statistics can be verified directly from the run manifest (`outputs/phase1_run_manifest.json`). A separate `.npz` bootstrap index file is therefore not required for artifact inspection or result verification.
 
