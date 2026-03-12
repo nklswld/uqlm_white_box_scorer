@@ -63,7 +63,7 @@ ERRORBAR_LINEWIDTH = 1.6
 ERRORBAR_CAPTHICK = 1.6
 BASELINE_LINEWIDTH = 1.4
 
-TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
+TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Ternary)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 
 # Canonical scorer keys expected in results; analysis intentionally restricts to these (repo convention).

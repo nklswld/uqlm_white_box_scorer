@@ -64,7 +64,7 @@ ERRORBAR_LINEWIDTH = 1.6
 ERRORBAR_CAPTHICK = 1.6
 BASELINE_LINEWIDTH = 1.4
 
-TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
+TASK_PRETTY = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Ternary)"}
 MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 
 
@@ -549,7 +549,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
             ax.set_ylim(*y_lim)
 
             task_title = TASK_PRETTY.get(task, task)
-            task_title = task_title.replace("(Yes/No/Maybe)", "(Yes/No/Maybe)\n")
+            task_title = task_title.replace("(Ternary)", "(Ternary)\n")
             ax.set_title(f"{task_title} — {MODEL_PRETTY.get(model, model)}")
 
             if c == 0:

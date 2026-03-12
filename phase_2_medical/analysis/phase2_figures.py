@@ -447,7 +447,7 @@ plot_spearman_grouped(df_spear_filtered,
 # ======================================================================
 TASK_ORDER_STORY  = ["medqa", "pubmedqa"]
 MODEL_ORDER_STORY = ["mistral", "biomistral"]
-TASK_PRETTY       = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Yes/No/Maybe)"}
+TASK_PRETTY       = {"medqa": "MedQA (MCQ)", "pubmedqa": "PubMedQA (Ternary)"}
 STORY_DIR         = FIGS / "story"
 STORY_DIR.mkdir(parents=True, exist_ok=True)
 
