@@ -634,7 +634,7 @@ if not df_scalar.empty:
         pretty_map=SCALAR_PRETTY,
         metric="auroc",
         y_lim=AUROC_YLIM,
-        title="Appendix: EGH Scalar Signals — AUROC ± 95% CI",
+        title="EGH Scalar Signals — AUROC ± 95% CI",
         outpath=OUT_DIR / "fig_appendix_egh_scalar_signals_auroc_overlay.pdf",
         xtick_rotation=20,
     )
@@ -645,7 +645,7 @@ if not df_scalar.empty:
         pretty_map=SCALAR_PRETTY,
         metric="spearman",
         y_lim=SPEARMAN_YLIM,
-        title="Appendix: EGH Scalar Signals — Spearman ρ ± 95% CI",
+        title="EGH Scalar Signals — Spearman ρ ± 95% CI",
         outpath=OUT_DIR / "fig_appendix_egh_scalar_signals_spearman_overlay.pdf",
         xtick_rotation=20,
     )
