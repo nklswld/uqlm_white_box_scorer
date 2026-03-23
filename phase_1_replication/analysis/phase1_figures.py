@@ -254,7 +254,7 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
     # Reference baseline for random discrimination (binary AUROC = 0.5).
     ax.axvline(0.5, linestyle="--", linewidth=1.5, color="black")
 
-    ax.set_xlabel("AUROC (higher = more hallucination-likely)")
+    ax.set_xlabel("AUROC (higher = better hallucination discrimination)")
     ax.set_xlim(0.4, 0.8)  # fixed range improves cross-run visual comparability
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
