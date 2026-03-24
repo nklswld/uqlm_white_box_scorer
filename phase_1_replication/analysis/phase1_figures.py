@@ -220,21 +220,23 @@ def finalize_suptitle(fig: plt.Figure, title: str, *, y: float = 0.99, top_rect:
 # -----------------------------
 def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
     """Figure 1: AUROC comparison (horizontal bars with manifest bootstrap CI)."""
+    order = ordered_subset(DEFAULT_ORDER, ci_df["Scorer"].tolist())
+    ci_df_plot = ci_df.set_index("Scorer").loc[order].reset_index()
+
     fig, ax = plt.subplots(figsize=(7.0, 3.8))
 
-    y_pos = np.arange(len(ci_df))
+    y_pos = np.arange(len(ci_df_plot))
     ax.barh(
         y_pos,
-        ci_df["AUROC"].values,
-        xerr=[ci_df["err_low"].values, ci_df["err_high"].values],
+        ci_df_plot["AUROC"].values,
+        xerr=[ci_df_plot["err_low"].values, ci_df_plot["err_high"].values],
         align="center",
         alpha=0.9,
         capsize=4,
-        height=BAR_WIDTH,  # slightly slimmer bars for denser label packing
+        height=BAR_WIDTH,
     )
 
-    # Value labels: offset in screen-space to avoid overlap with CI whiskers (stable across x-scales).
-    for i, val in enumerate(ci_df["AUROC"].values):
+    for i, val in enumerate(ci_df_plot["AUROC"].values):
         ax.annotate(
             f"{val:.3f}",
             xy=(val + 0.005, i),
@@ -244,24 +246,23 @@ def plot_fig1_auroc_bar(ci_df: pd.DataFrame, outdir: Path) -> None:
             va="bottom",
             fontsize=int(mpl.rcParams["xtick.labelsize"] * 0.85),
             zorder=5,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),  # ensures legibility over CI lines
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),
         )
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels([short_name(s) for s in ci_df["Scorer"].tolist()])
-    ax.invert_yaxis()  # invariant: highest AUROC displayed at the top
+    ax.set_yticklabels([short_name(s) for s in ci_df_plot["Scorer"].tolist()])
+    ax.invert_yaxis()
 
-    # Reference baseline for random discrimination (binary AUROC = 0.5).
     ax.axvline(0.5, linestyle="--", linewidth=1.5, color="black")
 
     ax.set_xlabel("AUROC (higher = better hallucination discrimination)")
-    ax.set_xlim(0.4, 0.8)  # fixed range improves cross-run visual comparability
+    ax.set_xlim(0.4, 0.8)
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
     finalize_suptitle(fig, "AUROC Comparison (TruthfulQA, Frozen Answers)", y=0.97, top_rect=0.97)
     safe_savefig(fig, outdir / "fig1_auroc_bar_comparison.pdf")
     plt.close(fig)
-
+    
 
 def plot_fig2_bootstrap_ci(ci_df: pd.DataFrame, outdir: Path) -> None:
     """Figure 2: AUROC with bootstrap 95% CI (interval plot, fixed scorer order)."""

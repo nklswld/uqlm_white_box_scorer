@@ -512,66 +512,89 @@ def plot_metric_matrix(df_all: pd.DataFrame, metric: str, outpath: Path):
 
 
 
-def plot_task_overlay_auroc(df_task: pd.DataFrame, task: str):
-    """Overlay AUROC-by-layer curves for both models within a single task."""
-    fig, ax = plt.subplots(figsize=(11.5, 5.2))
+def plot_overlay_auroc_two_tasks(df_all: pd.DataFrame):
+    """AUROC-Overlay für beide Tasks nebeneinander: MedQA links, PubMedQA rechts."""
+    tasks_order = ["medqa", "pubmedqa"]
 
-    # Overlay keeps task fixed while comparing models; y-limits are global for cross-task comparability.
-    for model in ["mistral", "biomistral"]:
-        sub = df_task[df_task["model"] == model].sort_values("layer")
-        if len(sub) == 0:
-            continue
-        x = sub["layer"].to_numpy(dtype=int)
-        y = sub["auroc_boot_mean"].to_numpy(dtype=float)
-        lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
-        hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
-        _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.8), sharey=True)
+    axes = np.array(axes)
 
-    ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
-    ax.set_ylim(*AUROC_YLIM)
-    ax.set_xlabel("Hidden layer index")
-    ax.set_ylabel("AUROC")
-    ax.set_title(
-        f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Model overlay)",
-        pad=18 
+    for ax, task in zip(axes, tasks_order):
+        df_task = df_all[df_all["task"] == task].copy()
+
+        for model in ["mistral", "biomistral"]:
+            sub = df_task[df_task["model"] == model].sort_values("layer")
+            if len(sub) == 0:
+                continue
+
+            x = sub["layer"].to_numpy(dtype=int)
+            y = sub["auroc_boot_mean"].to_numpy(dtype=float)
+            lo = sub["auroc_ci95_lo"].to_numpy(dtype=float)
+            hi = sub["auroc_ci95_hi"].to_numpy(dtype=float)
+
+            _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
+
+        ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+        ax.set_ylim(*AUROC_YLIM)
+        ax.set_xlabel("Hidden layer index")
+        ax.set_title(TASK_PRETTY.get(task, task))
+
+    axes[0].set_ylabel("AUROC")
+    axes[0].legend(frameon=False, title="Model")
+
+    fig.suptitle(
+        "Hidden Layer Sweep — AUROC ± 95% CI",
+        y=0.98,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.13,
     )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.subplots_adjust(wspace=0.18)
 
-    ax.legend(frameon=False, title="Model")
-    fig.subplots_adjust(top=0.88)
-
-    out = FIGS_DIR / f"fig_ablation_hidden_layers_auroc_overlay_{task}.pdf"
+    out = FIGS_DIR / "fig_ablation_hidden_layers_auroc_overlay.pdf"
     safe_savefig(fig, out, bbox_inches="tight")
     plt.close(fig)
     return out
 
 
-def plot_task_overlay_spearman(df_task: pd.DataFrame, task: str):
-    """Overlay bootstrap-mean Spearman rho-by-layer curves for both models within a single task."""
-    fig, ax = plt.subplots(figsize=(11.5, 5.2))
+def plot_overlay_spearman_two_tasks(df_all: pd.DataFrame):
+    """Spearman-Overlay für beide Tasks nebeneinander: MedQA links, PubMedQA rechts."""
+    tasks_order = ["medqa", "pubmedqa"]
 
-    for model in ["mistral", "biomistral"]:
-        sub = df_task[df_task["model"] == model].sort_values("layer")
-        if len(sub) == 0:
-            continue
-        x = sub["layer"].to_numpy(dtype=int)
-        y = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
-        lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
-        hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
-        _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.8), sharey=True)
+    axes = np.array(axes)
 
-    ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
-    ax.set_ylim(*SPEARMAN_YLIM)
-    ax.set_xlabel("Hidden layer index")
-    ax.set_ylabel("Spearman ρ (bootstrap mean)")
-    ax.set_title(
-        f"Hidden Layer Sweep — {TASK_PRETTY.get(task, task)} (Spearman overlay)",
-        pad=18
+    for ax, task in zip(axes, tasks_order):
+        df_task = df_all[df_all["task"] == task].copy()
+
+        for model in ["mistral", "biomistral"]:
+            sub = df_task[df_task["model"] == model].sort_values("layer")
+            if len(sub) == 0:
+                continue
+
+            x = sub["layer"].to_numpy(dtype=int)
+            y = sub["spearman_rho_boot_mean"].to_numpy(dtype=float)
+            lo = sub["spearman_ci95_lo"].to_numpy(dtype=float)
+            hi = sub["spearman_ci95_hi"].to_numpy(dtype=float)
+
+            _plot_line_ci(ax, x, y, lo, hi, label=MODEL_PRETTY.get(model, model))
+
+        ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
+        ax.set_ylim(*SPEARMAN_YLIM)
+        ax.set_xlabel("Hidden layer index")
+        ax.set_title(TASK_PRETTY.get(task, task))
+
+    axes[0].set_ylabel("Spearman ρ (bootstrap mean)")
+    axes[0].legend(frameon=False, title="Model")
+
+    fig.suptitle(
+        "Hidden Layer Sweep — Spearman ρ ± 95% CI",
+        y=0.98,
+        fontsize=mpl.rcParams["figure.titlesize"] * 1.13,
     )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.subplots_adjust(wspace=0.18)
 
-    ax.legend(frameon=False, title="Model")
-    fig.subplots_adjust(top=0.88)
-
-    out = FIGS_DIR / f"fig_ablation_hidden_layers_spearman_overlay_{task}.pdf"
+    out = FIGS_DIR / "fig_ablation_hidden_layers_spearman_overlay.pdf"
     safe_savefig(fig, out, bbox_inches="tight")
     plt.close(fig)
     return out
@@ -582,12 +605,9 @@ def plot_task_overlay_spearman(df_task: pd.DataFrame, task: str):
 # ============================================================
 written = []
 
-for task in sorted(df["task"].unique()):
-    df_task = df[df["task"] == task].copy()
-
-    # Overlay plots emphasize model differences while holding task fixed.
-    written.append(plot_task_overlay_auroc(df_task, task))
-    written.append(plot_task_overlay_spearman(df_task, task))
+# Both tasks displayed side by side within a single overlay figure
+written.append(plot_overlay_auroc_two_tasks(df))
+written.append(plot_overlay_spearman_two_tasks(df))
 
 # 2x2 matrices emphasize task/model structure at fixed metric scale.
 written.append(
