@@ -23,7 +23,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Plot style (kept consistent with phase2_figures.py for paper-wide comparability)
 # ============================================================
-FONT_SCALE = 1.35
+FONT_SCALE = 1.45
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -536,23 +536,19 @@ def plot_delta(metric: str, outpath: Path):
     # Global y-limits: enforce a shared scale across subplots to support visual comparison.
     vals = df[[lo_col, hi_col]].to_numpy(dtype=float).reshape(-1)
     vals = vals[np.isfinite(vals)]
+
     if vals.size == 0:
-        # Fallback range to keep plots readable if all distributions are empty/NaN.
-        y_min, y_max = -0.05, 0.20
+        y_min = -0.05
     else:
-        pad = 0.01 * (float(np.max(vals)) - float(np.min(vals)) + 1e-9)
-        y_min = float(np.min(vals)) - pad
-        y_max = float(np.max(vals)) + pad
-        # Ensure the Δ=0 reference line is visible even if all CIs are positive/negative.
-        y_min = min(y_min, -0.01)
-        y_max = max(y_max, 0.01)
-        # Add headroom so value labels do not collide with subplot titles (keeps scale comparable).
-        y_max = y_max + 0.10 * (y_max - y_min + 1e-9)
+        y_min = float(np.min(vals))
+        y_min = min(y_min, -0.01)  # keep zero baseline visible
+
+    y_max = 0.55
 
 
     fig, axes = plt.subplots(
         len(models), len(tasks),
-        figsize=(5.6 * len(tasks), 3.9 * len(models)),
+        figsize=(5.3 * len(tasks), 3.9 * len(models)),
         sharey=True
     )
 

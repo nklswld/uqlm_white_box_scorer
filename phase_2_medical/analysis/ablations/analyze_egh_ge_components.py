@@ -438,14 +438,14 @@ def plot_overlay(metric: str, y_lim, title: str, outpath: Path):
         ax.set_xticklabels([CAT_PRETTY.get(c, c) for c in CATS], rotation=0, ha="center")
         ax.margins(x=0.12)
         ax.set_ylim(*y_lim)
-        overlay_panel_title_fs = mpl.rcParams["axes.titlesize"] * 0.90
+        overlay_panel_title_fs = mpl.rcParams["axes.titlesize"] * 1.00
         ax.set_title(TASK_PRETTY.get(task, task), fontsize=overlay_panel_title_fs)
         ax.set_ylabel(ylabel)
 
     axes[0].legend(frameon=False, title="Model")
     axes[0].legend(frameon=False, title="Model")
 
-    fig.suptitle(title, y=0.96, fontsize=mpl.rcParams["figure.titlesize"])
+    fig.suptitle(title, y=0.955, fontsize=mpl.rcParams["figure.titlesize"] * 1.13)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     fig.subplots_adjust(wspace=0.20)
     safe_savefig(fig, outpath, bbox_inches="tight")
@@ -517,7 +517,7 @@ def plot_bars_matrix(metric: str, y_lim, outstem: str):
             if c == 0:
                 ax.set_ylabel(ylabel)
 
-            add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
+            add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", fontsize=mpl.rcParams["font.size"] * 1.05)
 
     fig.suptitle(
         f"EGH Probe Design (G-only vs E-only vs G+E) — "

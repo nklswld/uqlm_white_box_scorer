@@ -30,13 +30,13 @@ mpl.rcParams.update({
     "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
 
     "font.size": int(12 * FONT_SCALE),
-    "axes.titlesize": int(14 * FONT_SCALE),
+    "axes.titlesize": int(13.5 * FONT_SCALE),
     "axes.labelsize": int(13 * FONT_SCALE),
     "xtick.labelsize": int(13 * FONT_SCALE),
     "ytick.labelsize": int(10 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),
-    "figure.titlesize": int(15 * FONT_SCALE),
+    "figure.titlesize": int(14.5 * FONT_SCALE),
 
     "axes.titlepad": 12,
 
@@ -544,11 +544,11 @@ def plot_overlay_auroc_two_tasks(df_all: pd.DataFrame):
 
     fig.suptitle(
         "Hidden Layer Sweep — AUROC ± 95% CI",
-        y=0.98,
+        y=0.945,
         fontsize=mpl.rcParams["figure.titlesize"] * 1.13,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.subplots_adjust(wspace=0.18)
+    fig.subplots_adjust(wspace=0.14)
 
     out = FIGS_DIR / "fig_ablation_hidden_layers_auroc_overlay.pdf"
     safe_savefig(fig, out, bbox_inches="tight")
@@ -588,11 +588,11 @@ def plot_overlay_spearman_two_tasks(df_all: pd.DataFrame):
 
     fig.suptitle(
         "Hidden Layer Sweep — Spearman ρ ± 95% CI",
-        y=0.98,
+        y=0.945,
         fontsize=mpl.rcParams["figure.titlesize"] * 1.13,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.subplots_adjust(wspace=0.18)
+    fig.subplots_adjust(wspace=0.14)
 
     out = FIGS_DIR / "fig_ablation_hidden_layers_spearman_overlay.pdf"
     safe_savefig(fig, out, bbox_inches="tight")

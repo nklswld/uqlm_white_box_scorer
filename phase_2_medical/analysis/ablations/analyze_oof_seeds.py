@@ -22,7 +22,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Plot style (kept consistent with phase2_figures.py)
 # ============================================================
-FONT_SCALE = 1.5  # global scaling for print/PDF legibility
+FONT_SCALE = 1.58  # global scaling for print/PDF legibility
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -31,7 +31,7 @@ mpl.rcParams.update({
     "font.size": int(12 * FONT_SCALE),
     "axes.titlesize": int(13 * FONT_SCALE),
     "axes.labelsize": int(12 * FONT_SCALE),
-    "xtick.labelsize": int(13 * FONT_SCALE),
+    "xtick.labelsize": int(12 * FONT_SCALE),
     "ytick.labelsize": int(11 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),

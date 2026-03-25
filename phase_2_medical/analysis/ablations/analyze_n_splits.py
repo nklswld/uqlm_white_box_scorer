@@ -20,7 +20,7 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.5  # shared figure typography scaling across the repo
+FONT_SCALE = 1.6  # shared figure typography scaling across the repo
 
 mpl.rcParams.update({
     "font.family": "serif",

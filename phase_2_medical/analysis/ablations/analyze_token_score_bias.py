@@ -22,14 +22,14 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Style: consistent with phase2_figures.py
 # ============================================================
-FONT_SCALE = 1.5  # Global typographic scale; keep consistent across appendix figures.
+FONT_SCALE = 1.7  # Global typographic scale; keep consistent across appendix figures.
 
 mpl.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
 
     "font.size": int(12 * FONT_SCALE),
-    "axes.titlesize": int(13 * FONT_SCALE),
+    "axes.titlesize": int(14 * FONT_SCALE),
     "axes.labelsize": int(12 * FONT_SCALE),
     "xtick.labelsize": int(13 * FONT_SCALE),
     "ytick.labelsize": int(11 * FONT_SCALE),
@@ -37,7 +37,7 @@ mpl.rcParams.update({
     "legend.title_fontsize": int(11 * FONT_SCALE),
     "figure.titlesize": int(14.5 * FONT_SCALE),
 
-    "axes.titlepad": 12,
+    "axes.titlepad": 22,
 
     # Slightly thicker axes/ticks for print/PDF legibility
     "axes.linewidth": 1.2,
@@ -351,7 +351,7 @@ def plot_auroc_mean_vs_sum(df_run: pd.DataFrame, run_tag: str):
     x = np.arange(len(order), dtype=float)
     y = sub["auroc"].to_numpy(dtype=float)
 
-    fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(11.0, 5.3), constrained_layout=True)
     ax.bar(x, y, width=0.65)
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # AUROC chance baseline.
 
@@ -385,7 +385,7 @@ def plot_spearman_vs_len(df_run: pd.DataFrame, run_tag: str):
     x = np.arange(len(order), dtype=float)
     y = sub["spearman_score_vs_len"].to_numpy(dtype=float)
 
-    fig, ax = plt.subplots(figsize=(11.0, 4.7), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(11.0, 5.3), constrained_layout=True)
     ax.bar(x, y, width=0.65)
     ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # Zero indicates no monotonic length dependence.
 
@@ -429,7 +429,7 @@ def plot_k_sweep(dfk_run: pd.DataFrame, run_tag: str):
     lntp = sub["lntp_auc"].to_numpy(dtype=float)
     mtp = sub["mtp_auc"].to_numpy(dtype=float)
 
-    fig, ax = plt.subplots(figsize=(10.5, 4.6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(10.5, 5.1), constrained_layout=True)
     ax.plot(k, lntp, marker="o", label="LNTP (AUROC)")
     ax.plot(k, mtp, marker="o", label="MTP (AUROC)")
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)  # AUROC chance baseline.

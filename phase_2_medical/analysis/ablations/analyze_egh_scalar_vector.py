@@ -20,20 +20,20 @@ from sklearn.metrics import roc_auc_score
 # ============================================================
 # Plot style (kept consistent with phase2_figures.py for cross-figure comparability)
 # ============================================================
-FONT_SCALE = 1.3
+FONT_SCALE = 1.45
 
 mpl.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
 
     "font.size": int(12 * FONT_SCALE),
-    "axes.titlesize": int(14 * FONT_SCALE),
-    "axes.labelsize": int(13 * FONT_SCALE),
-    "xtick.labelsize": int(13 * FONT_SCALE),
+    "axes.titlesize": int(13.3 * FONT_SCALE),
+    "axes.labelsize": int(11.8 * FONT_SCALE),
+    "xtick.labelsize": int(11.5 * FONT_SCALE),
     "ytick.labelsize": int(10 * FONT_SCALE),
     "legend.fontsize": int(11 * FONT_SCALE),
     "legend.title_fontsize": int(11 * FONT_SCALE),
-    "figure.titlesize": int(15 * FONT_SCALE),
+    "figure.titlesize": int(14 * FONT_SCALE),
 
     "axes.titlepad": 12,
 
@@ -476,12 +476,12 @@ def plot_overlay(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
         ax.set_xticklabels([pretty_map.get(c, c) for c in cats], rotation=xtick_rotation, ha="center")
         ax.set_ylim(*y_lim)
         ax.set_title(TASK_PRETTY.get(task, task))
-        ax.set_ylabel(ylabel)
+        ax.set_ylabel(ylabel, labelpad=7)
 
     axes[0].legend(frameon=False, title="Model")
-    fig.suptitle(title, y=0.96, fontsize=mpl.rcParams["figure.titlesize"] * 1.15)
+    fig.suptitle(title, y=0.96, fontsize=mpl.rcParams["figure.titlesize"] * 1.13)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
-    fig.subplots_adjust(wspace=0.18)
+    fig.subplots_adjust(wspace=0.20)
     safe_savefig(fig, outpath, bbox_inches="tight")
     plt.close(fig)
     print("Wrote:", outpath)
@@ -556,7 +556,7 @@ def plot_bars_matrix(df_sub: pd.DataFrame, cats: list, pretty_map: dict,
                 ax.set_ylabel(ylabel)
 
             # Value labels are placed above the upper CI whisker for readability at tight y-limits.
-            add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}")
+            add_value_labels_above_ci(ax, x, y, yerr_high, fmt="{:.3f}", fontsize=mpl.rcParams["font.size"] * 1.05)
 
     fig.suptitle(
         f"EGH Scalar vs Vector — "
