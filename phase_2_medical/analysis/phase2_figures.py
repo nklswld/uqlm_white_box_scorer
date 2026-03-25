@@ -508,7 +508,7 @@ _story_2x2(_panel_delta,
 
 # Story 3: task-format effect lines
 key_scores = ["lntp", "egh_probe_oof", "hidden_probe_oof"]
-fig, axes  = plt.subplots(1, 2, figsize=(11, 4.5), constrained_layout=True, sharey=True)
+fig, axes  = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
 for j, model in enumerate(MODEL_ORDER_STORY):
     ax = axes[j]
     for score in key_scores:
@@ -525,14 +525,15 @@ for j, model in enumerate(MODEL_ORDER_STORY):
     ax.axhline(0.5, linestyle="--", linewidth=BASELINE_LINEWIDTH)
     ax.set_xticks(np.arange(len(TASK_ORDER_STORY)))
     ax.set_xticklabels([TASK_PRETTY[t] for t in TASK_ORDER_STORY],
-                   rotation=0, fontsize=int(12 * FONT_SCALE))
-    ax.set_title(MODEL_PRETTY[model], fontsize=int(14.5 * FONT_SCALE), pad=20)
-    ax.set_ylabel("AUROC", fontsize=int(12 * FONT_SCALE))
-    ax.tick_params(axis="y", labelsize=int(11 * FONT_SCALE))
+                    rotation=0, fontsize=int(11.3 * FONT_SCALE))
+    ax.set_title(MODEL_PRETTY[model], fontsize=int(13 * FONT_SCALE), pad=10)
+    ax.set_ylabel("AUROC", fontsize=int(11.8 * FONT_SCALE))
+    ax.tick_params(axis="y", labelsize=int(10.6 * FONT_SCALE))
     ax.set_ylim(*AUROC_YLIM)
 axes[0].legend(frameon=False, title="Scorer")
 fig.suptitle("Task-format effect: scorer performance shifts from MCQ → Yes/No",
-             y=1.10, fontsize=plt.rcParams["figure.titlesize"]* 1.15)
+             y=0.96, fontsize=plt.rcParams["figure.titlesize"] * 1.05)
+fig.tight_layout(rect=[0, 0, 1, 0.985])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_3_task_format_effect_lines.pdf", bbox_inches="tight")
 plt.close(fig)
 
@@ -566,12 +567,13 @@ ax.bar(x, vals, width=0.65)
 _errorbar(ax, x, vals, err_low, err_high)
 ax.axhline(0.0, linestyle="--", linewidth=BASELINE_LINEWIDTH)
 ax.set_xticks(x)
-ax.set_xticklabels(x_labels, rotation=20, ha="right", fontsize=int(12 * FONT_SCALE))
-ax.tick_params(axis="y", labelsize=int(11.5 * FONT_SCALE), pad=4)
+ax.set_xticklabels(x_labels, rotation=20, ha="right", fontsize=int(12.0 * FONT_SCALE))
+ax.tick_params(axis="y", labelsize=int(10.8 * FONT_SCALE), pad=4)
 ax.tick_params(axis="x", pad=8)
-ax.set_ylabel("ΔAUROC (Mistral − BioMistral)", fontsize=int(12.5 * FONT_SCALE))
-ax.set_title("Model specialization effect (approx. CI via bounds)",
-             pad=25, fontsize=plt.rcParams["axes.titlesize"] * 1.25)
+ax.set_ylabel("ΔAUROC (Mistral − BioMistral)", fontsize=int(12 * FONT_SCALE))
+ax.set_title("Model specialization effect across task format and scorer",
+             pad=40, fontsize=plt.rcParams["axes.titlesize"] * 1.20)
+
 ymin = min(np.array(vals) - np.array(err_low))
 ymax = max(np.array(vals) + np.array(err_high))
 pad  = 0.12 * (ymax - ymin + 1e-9)
