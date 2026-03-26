@@ -532,7 +532,7 @@ for j, model in enumerate(MODEL_ORDER_STORY):
     ax.set_ylim(*AUROC_YLIM)
 axes[0].legend(frameon=False, title="Scorer")
 fig.suptitle("Task-format effect: scorer performance shifts from MCQ → Yes/No",
-             y=0.96, fontsize=plt.rcParams["figure.titlesize"] * 1.05)
+             y=0.96, fontsize=plt.rcParams["figure.titlesize"] * 1.09)
 fig.tight_layout(rect=[0, 0, 1, 0.985])
 safe_savefig(fig, STORY_DIR / "fig_phase2_story_3_task_format_effect_lines.pdf", bbox_inches="tight")
 plt.close(fig)
@@ -572,7 +572,7 @@ ax.tick_params(axis="y", labelsize=int(10.8 * FONT_SCALE), pad=4)
 ax.tick_params(axis="x", pad=8)
 ax.set_ylabel("ΔAUROC (Mistral − BioMistral)", fontsize=int(12 * FONT_SCALE))
 ax.set_title("Model specialization effect across task format and scorer",
-             pad=40, fontsize=plt.rcParams["axes.titlesize"] * 1.20)
+             pad=36, fontsize=plt.rcParams["axes.titlesize"] * 1.24)
 
 ymin = min(np.array(vals) - np.array(err_low))
 ymax = max(np.array(vals) + np.array(err_high))
