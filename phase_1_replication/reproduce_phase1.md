@@ -7,7 +7,7 @@ This document describes how to reproduce all Phase-1 results in this repository.
 Phase 1 evaluates white-box hallucination detection methods on a frozen subset of the TruthfulQA benchmark.
 All experiments operate exclusively on pre-generated model outputs and are fully deterministic.
 
-No text generation, sampling, fine-tuning, or labeling is performed during reproduction.
+No text generation, sampling, fine-tuning, or labeling is performed during result reproduction.
 
 ---
 
@@ -44,6 +44,7 @@ Each line is a JSON object with the following fields:
 No other datasets are required.
 
 ---
+
 
 ## Inter-Annotator Agreement (IAA) Verification
 

@@ -67,19 +67,54 @@ Not in scope for Phase 1:
 
 Evaluation is performed on a frozen subset of the TruthfulQA benchmark.
 
-Model outputs are generated once using a fixed prompt and checkpoint and are reused unchanged across all experiments.  
+The final Phase-1 benchmark artifact is:
+
+`benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl`
+
+This file serves as the single source of truth for Phase 1 and contains:
+
+- `qid`  
+- `question`  
+- `reference_answer`  
+- `model_answer`  
+- `hallucinated`  
+
+Model outputs are generated once using a fixed prompt and checkpoint and are then reused unchanged across all experiments.  
 All Phase-1 evaluations use teacher forcing only; no text generation is performed during evaluation.
 
 Model checkpoint used in Phase 1:
 
-mistralai/Mistral-7B-Instruct-v0.2
+`mistralai/Mistral-7B-Instruct-v0.2`
 
-The frozen dataset is stored in:
+The underlying 300-example subset is sampled reproducibly with fixed seed `42` and stored in:
 
-benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl
+`benchmarks/truthfulqa_hallu_subset_300_qids.json`
 
-This file serves as the single source of truth for Phase 1.  
-Further dataset details are provided in DATA.md.
+Further dataset and construction details are documented in `DATA.md`.
+
+---
+
+## Data Construction Workflow
+
+The Phase-1 benchmark is constructed through the following optional preparation steps:
+
+1. `src/prepare_truthfulqa_simplified.py`  
+   converts a TruthfulQA source export into  
+   `benchmarks/truthfulqa_simplified.json`
+
+2. `src/prepare_truthfulqa_hallu_subset.py`  
+   draws the deterministic 300-example subset and writes  
+   `benchmarks/truthfulqa_hallu_subset_300_qids.json`
+
+3. `src/build_truthfulqa_hallu_base.py`  
+   generates frozen model answers for the fixed subset and writes  
+   `benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl`  
+   with `hallucinated = null`
+
+4. manual annotation is then performed directly in  
+   `benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl`
+
+For evaluation and thesis reproduction, only the final frozen benchmark artifact is required.
 
 ---
 
@@ -87,7 +122,7 @@ Further dataset details are provided in DATA.md.
 
 Hallucination labels were assigned manually based on a predefined annotation guideline:
 
-benchmarks/labeling_guidelines_hallucination.md
+`benchmarks/labeling_guidelines_hallucination.md`
 
 Labeling reliability was assessed using a self-inter-annotator agreement procedure:
 
@@ -103,7 +138,7 @@ Results:
 
 Full results are stored in:
 
-outputs/self_iaa_summary.json
+`outputs/self_iaa_summary.json`
 
 ---
 
@@ -130,37 +165,6 @@ Phase 1 is fully reproducible using frozen inputs and deterministic scripts.
 
 Run evaluation:
 
-pip install -r requirements.txt  
-python src/run_phase1_truthfulqa.py  
-
-Detailed reproduction instructions are provided in reproduce_phase1.md.
-
----
-
-## Repository Structure
-
-benchmarks/  
-Frozen datasets, labels, and annotation artifacts  
-
-src/  
-Core implementation of scorers and evaluation pipeline  
-
-outputs/  
-Deterministic evaluation results and summaries  
-
-analysis/  
-Optional notebooks for result inspection and figure generation  
-
----
-
-## Scope and Limitations
-
-Phase 1 evaluates hallucination detection under a controlled experimental setting.  
-Results are intended for methodological comparison of white-box signals and do not constitute leaderboard claims.
-
----
-
-## License and Usage
-
-This repository is intended for academic and research use.  
-Users are responsible for complying with the licenses of external datasets and model checkpoints.
+```bash
+pip install -r requirements.txt
+python src/run_phase1_truthfulqa.py
