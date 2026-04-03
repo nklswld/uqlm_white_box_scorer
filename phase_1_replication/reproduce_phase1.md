@@ -5,7 +5,7 @@
 This document describes how to reproduce all Phase-1 results in this repository.
 
 Phase 1 evaluates white-box hallucination detection methods on a frozen subset of the TruthfulQA benchmark.
-All experiments operate exclusively on pre-generated model outputs and are fully deterministic.
+All experiments operate exclusively on pre-generated model outputs and use fixed evaluation procedures.
 
 No text generation, sampling, fine-tuning, or labeling is performed during result reproduction.
 
@@ -163,8 +163,8 @@ All sources of randomness are fixed:
 - cross-validation splits  
 - bootstrap resampling  
 
-Repeated runs produce identical results, including bootstrap confidence intervals, up to floating-point precision.  
-Minor floating-point differences may occur across different hardware architectures (e.g., CPU vs. GPU).
+Repeated runs are intended to reproduce the archived results up to normal floating-point variation.  
+Minor differences may occur across hardware and runtime environments (e.g., CPU vs. GPU).
 
 ---
 

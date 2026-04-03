@@ -1,6 +1,6 @@
 # Phase 1 Data Documentation (`phase_1_replication/DATA.md`)
 
-This repository contains the complete, reproducible implementation of Phase 1 of the master's thesis
+This directory documents the Phase-1 data artifacts used in the master's thesis
 "White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models".
 
 Phase 1 investigates hallucination detection using white-box signals derived from a model's internal computations.
@@ -31,7 +31,7 @@ All Phase-1 experiments rely on a single frozen benchmark artifact:
 
 `benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl`
 
-This file serves as the **canonical Phase-1 evaluation dataset** and the **single source of truth** for all reported experimental results.
+This file serves as the **canonical Phase-1 evaluation dataset** and the fixed benchmark input for the reported Phase-1 experiments.
 
 Each JSONL row contains:
 
@@ -160,7 +160,7 @@ Together, these files document:
 - the exact sampled subset membership
 - the final frozen and manually annotated evaluation artifact
 
-All Phase-1 results can be reproduced from the final JSONL benchmark artifact and the provided evaluation scripts.
+Phase-1 evaluation can be reconstructed from the final JSONL benchmark artifact and the provided evaluation scripts, subject to the environment-dependent variation noted elsewhere in the repository documentation.
 
 ---
 

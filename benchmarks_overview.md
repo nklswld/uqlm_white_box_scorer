@@ -1,9 +1,8 @@
-# Benchmarks Overview - UQLM Master Thesis
+# Benchmarks Overview
 
-Purpose:
-Project-wide overview of all benchmark datasets used in this repository
-(Phase 1 + Phase 2), including source, role in the pipeline, and local
-canonical artifacts.
+This document summarizes the benchmark datasets used across both experimental phases, their role in the repository, and the corresponding local artifacts.
+
+In Phase 2, these benchmarks are used in a constrained prediction-error setting rather than as a generic free-form hallucination benchmark.
 
 ---
 
@@ -85,7 +84,4 @@ For thesis-level reported Phase-2 baseline numbers, canonical outputs are:
 
 ## Practical data location note
 
-When running preparation scripts, Hugging Face datasets are downloaded to the
-local HF cache (platform-dependent; typically under the user cache directory).
-Prepared benchmark files and frozen artifacts in this repository should be
-treated as the reproducibility anchors for this project.
+When running preparation scripts, Hugging Face datasets are downloaded to the local HF cache (platform-dependent; typically under the user cache directory). Prepared benchmark files and frozen artifacts in this repository should be treated as the reproducibility anchors for this project.
