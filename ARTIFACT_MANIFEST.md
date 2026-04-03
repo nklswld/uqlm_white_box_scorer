@@ -9,9 +9,9 @@ Scope:
 
 ---
 
-## 1) Artifact Policy (Canonical vs Optional)
+## 1) Artifact Policy
 
-## Canonical for reported results
+### Canonical for reported results
 
 These files are the primary source of truth for thesis-relevant reported outputs:
 
@@ -24,7 +24,7 @@ These files are the primary source of truth for thesis-relevant reported outputs
   - `phase_2_medical/outputs/final/*.manifest.json`
   - `phase_2_medical/outputs/final/*.manifest.bootstrap_indices.npz` (see tracking note below)
 
-## Input anchors (frozen/prepared data)
+### Input anchors (frozen/prepared data)
 
 - Phase 1 frozen benchmark:
   - `phase_1_replication/benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl`
@@ -37,7 +37,7 @@ These files are the primary source of truth for thesis-relevant reported outputs
   - `phase_2_medical/outputs/frozen/pubmedqa_mistral7b.jsonl`
   - `phase_2_medical/outputs/frozen/pubmedqa_biomistral7b.jsonl`
 
-## Optional / supplementary artifacts
+### Optional / supplementary artifacts
 
 - Phase 1 figures: `phase_1_replication/outputs/figs/*.pdf`
 - Phase 2 analysis exports:
@@ -47,46 +47,52 @@ These files are the primary source of truth for thesis-relevant reported outputs
   - `phase_2_medical/outputs/ablations/**`
   - `phase_2_medical/outputs/figures_tables/ablations/**`
 
+Interpretation note:
+
+- `outputs/final/` contains baseline example-level results and run manifests
+- `outputs/figures_tables/tables_general/` and `outputs/figures_tables/figures_general/` contain derived baseline summaries
+- `outputs/figures_tables/ablations/` contains derived summaries organized by ablation family
+
 ---
 
-## 2) Inventory (Current Repository State)
+## 2) Inventory
 
-## Phase 1
+### Phase 1
 
-### Benchmarks / labels
+#### Benchmarks / labels
 - `phase_1_replication/benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl` (300 rows)
 - `phase_1_replication/benchmarks/truthfulqa_simplified.json`
 - `phase_1_replication/benchmarks/self_iaa_round2_labels_seed42_n80.jsonl`
 - `phase_1_replication/benchmarks/self_iaa_round2_qids_seed42_n80.json`
 - `phase_1_replication/benchmarks/labeling_guidelines_hallucination.md`
 
-### Final outputs
+#### Final outputs
 - `phase_1_replication/outputs/phase1_truthfulqa_hallu_results_300.jsonl`
 - `phase_1_replication/outputs/phase1_run_manifest.json`
   - Note: this manifest is relatively large because bootstrap samples and index matrices are serialized directly in JSON. The corresponding bootstrap indices are also stored in compressed form in `phase1_run_manifest.bootstrap_indices.npz`.
 - `phase_1_replication/outputs/self_iaa_summary.json`
 - `phase_1_replication/outputs/figs/*.pdf` (figure set)
 
-### Bootstrap indices
+#### Bootstrap indices
 - No tracked Phase-1 `.npz` currently present in Git.
 
 ---
 
-## Phase 2
+### Phase 2
 
-### Prepared benchmark subsets
+#### Prepared benchmark subsets
 - `phase_2_medical/benchmarks/medqa_test_labeled_seed42_n1000.jsonl` (1000 rows)
 - `phase_2_medical/benchmarks/medqa_test_qids_seed42_n1000.json`
 - `phase_2_medical/benchmarks/pubmedqa_labeled_phase2.jsonl` (1000 rows)
 
-### Frozen prediction inputs
+#### Frozen prediction inputs
 - `phase_2_medical/outputs/frozen/medqa_mistral7b.jsonl` (1000 rows)
 - `phase_2_medical/outputs/frozen/medqa_biomistral7b.jsonl` (1000 rows)
 - `phase_2_medical/outputs/frozen/pubmedqa_mistral7b.jsonl` (1000 rows)
 - `phase_2_medical/outputs/frozen/pubmedqa_biomistral7b.jsonl` (1000 rows)
 - `phase_2_medical/outputs/frozen/truthfulqa_hallu_mistral_like.jsonl` (used for token-bias appendix/ablation flow)
 
-### Baseline final outputs (`outputs/final`)
+#### Baseline final outputs (`outputs/final`)
 - `medqa_mistral.B5000.results.jsonl` (1000 rows)
 - `medqa_mistral.B5000.manifest.json`
 - `medqa_mistral.B5000.manifest.bootstrap_indices.npz`
@@ -100,7 +106,7 @@ These files are the primary source of truth for thesis-relevant reported outputs
 - `pubmedqa_biomistral.B5000.manifest.json`
 - `pubmedqa_biomistral.B5000.manifest.bootstrap_indices.npz`
 
-### Supplementary outputs
+#### Supplementary outputs
 - Analysis tables/figures:
   - `phase_2_medical/outputs/figures_tables/tables_general/**`
   - `phase_2_medical/outputs/figures_tables/figures_general/**`
@@ -117,25 +123,27 @@ These files are the primary source of truth for thesis-relevant reported outputs
 - `*.npz` (intentionally ignored due artifact size constraints)
 
 Implication:
-- Bootstrap index files (`*.manifest.bootstrap_indices.npz`) may exist locally and be used in analysis, but are not guaranteed to be present in a fresh Git clone.
-- If exact CI regeneration from archived resampling indices is required, these `.npz` files must be transferred out-of-band (e.g., archive bundle).
+- Phase-1 bootstrap index files are not tracked in Git in the current repository state.
+- The released Phase-2 baseline bootstrap index files under `phase_2_medical/outputs/final/` are present in the current repository state.
+- Additional locally generated `.npz` artifacts are not guaranteed to be tracked in a fresh clone because of the repository size policy.
+- If exact CI regeneration from archived resampling indices is required beyond the tracked artifacts, these `.npz` files must be transferred out-of-band (e.g., archive bundle).
 
 ---
 
 ## 4) Reproduction Levels
 
-## Level A: Reported-artifact reproduction (recommended)
+### Level A: Reported-artifact reproduction (recommended)
 Use existing archived outputs:
 - Phase 1: `phase_1_replication/outputs/*`
-- Phase 2 baseline: `phase_2_medical/outputs/final/*` (+ `.npz` if available)
+- Phase 2 baseline: `phase_2_medical/outputs/final/*` (including tracked baseline `.npz` files in the current repository state)
 
-## Level B: Partial recomputation
+### Level B: Partial recomputation
 Recompute tables/figures from existing results/manifests:
 - `phase_1_replication/analysis/phase1_figures.py`
 - `phase_2_medical/analysis/phase2_tables.py`
 - `phase_2_medical/analysis/phase2_figures.py`
 
-## Level C: Full rerun (compute intensive)
+### Level C: Full rerun (compute intensive)
 Regenerate frozen outputs and rerun scoring pipelines:
 - Phase 1: `phase_1_replication/src/run_phase1_truthfulqa.py`
 - Phase 2: `phase_2_medical/scripts/run_baseline_all.sh` (plus optional ablations)
@@ -156,12 +164,15 @@ See:
 3. Confirm each baseline run has:
    - `.results.jsonl`
    - `.manifest.json`
-   - `.manifest.bootstrap_indices.npz` (if provided externally, due ignore policy)
+   - `.manifest.bootstrap_indices.npz`
 4. Confirm table exports exist:
    - `phase_2_medical/outputs/figures_tables/tables_general/phase2_metrics_auroc_ci.csv`
    - `phase_2_medical/outputs/figures_tables/tables_general/phase2_metrics_spearman_rho.csv`
 5. Confirm figure exports exist:
    - files under `phase_2_medical/outputs/figures_tables/figures_general/`
+
+Manifest semantics:
+- absolute paths stored inside manifests may reflect the original execution environment and should be interpreted as archival metadata rather than machine-independent path instructions
 
 ---
 

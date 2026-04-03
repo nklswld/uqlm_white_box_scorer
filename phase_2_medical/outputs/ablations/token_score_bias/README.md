@@ -1,30 +1,12 @@
 # Token Score Bias Ablation
 
-## Overview
+## Aim
 
-This directory contains a methodological ablation examining potential length-related bias in the token-level uncertainty scores LNTP and MTP.
-
-The ablation asks whether score magnitude is influenced by answer length or by the amount of answer text included in scoring. Its purpose is to test whether these token-level scores reflect uncertainty and hallucination-related signal, rather than primarily capturing superficial length effects.
+This ablation examines whether the token-level scores LNTP and MTP are sensitive to answer length or answer-span coverage. The concern is methodological validity: a score that changes mainly because more answer tokens are included is harder to interpret as a content-sensitive signal.
 
 ---
 
-## Hypothesis
-
-Unnormalized token-level scores based on summed token contributions may show stronger dependence on answer length than length-normalized mean scores. If this dependence is substantial, some apparent detection performance may reflect answer-length sensitivity rather than uncertainty alone.
-
-A complementary answer-span sweep tests whether LNTP and MTP are sensitive to how much of the answer text is scored.
-
----
-
-## Motivation / Background
-
-LNTP and MTP are token-level white-box scores, so their aggregation rule matters conceptually. A sum-based score can increase simply because more answer tokens are present, whereas a mean-based score is intended to reduce this dependence by normalizing for length.
-
-This distinction is important for uncertainty quantification and hallucination detection. If token-level score magnitude is strongly driven by answer length, then part of the measured signal may be attributable to a structural property of the response rather than to genuine uncertainty. Similarly, if performance changes substantially when only an answer prefix is scored, then interpretation of the score may depend on answer-span coverage.
-
----
-
-## Ablation Design
+## Analyses
 
 This ablation contains two complementary analyses.
 
@@ -50,27 +32,25 @@ The analysis also performs a prefix-length sweep by scoring only the first `k` a
 
 This tests how sensitive token-level detection performance is to the amount of answer content included.
 
-The archived runs in this directory use frozen TruthfulQA hallucination annotations converted to the Phase 2 frozen-input format. The current released artifacts in this folder cover the Mistral configuration.
+The archived runs in this directory use frozen TruthfulQA hallucination annotations converted to the Phase 2 frozen-input format. The released artifacts in this folder cover the Mistral configuration.
 
-Operationally, the ablation is implemented with:
+Implementation entry points:
 
 - `phase_2_medical/src/run_token_bias_lntp_mtp.py`
 - `phase_2_medical/scripts/run_ablation_token_score_bias.sh`
 
-The maintained runner keeps the model and runtime configuration fixed while computing the mean-versus-sum comparison and the answer-prefix sweep. Each model directory contains per-example score outputs and summary manifests for direct inspection.
+The maintained runner keeps the model and runtime configuration fixed while computing both the mean-versus-sum comparison and the answer-prefix sweep. Each model directory contains per-example score outputs and summary manifests.
 
 ---
 
-## Expected Effect
+## Why It Matters
 
-If token-length bias is present, sum-based variants should exhibit stronger dependence on answer length than mean-based variants. In that case, any apparent detection advantage associated with unnormalized sums should be interpreted cautiously.
+If token-length bias is present, sum-based variants should show stronger dependence on answer length than mean-based variants. In that case, any apparent detection advantage associated with unnormalized sums needs qualification.
 
-If the answer-span sweep shows marked changes as `k` varies, this would indicate that LNTP or MTP depends materially on how much answer content is included in scoring. For uncertainty quantification and hallucination detection, this matters because strong length or span sensitivity would complicate interpretation of these scores as content-sensitive uncertainty measures.
+If the answer-span sweep changes markedly with `k`, LNTP or MTP depends materially on how much of the answer is scored. That would complicate interpretation of these scores as content-sensitive signals.
 
 ---
 
-## Notes / Interpretation
+## Reading the Results
 
-This ablation should be interpreted as a methodological appendix analysis of score construction and score validity. It is not a primary comparison within the main MedQA and PubMedQA evaluation grid.
-
-Accordingly, the main question is whether LNTP and MTP remain interpretable after accounting for answer length and answer-span effects. If strong dependence on length or prefix coverage is observed, then conclusions based on these token-level scores should be qualified accordingly.
+This directory is best read as a methodological appendix analysis of score construction. It is not part of the main MedQA/PubMedQA comparison grid. The main question is whether LNTP and MTP remain interpretable once answer length and answer-span effects are made explicit.

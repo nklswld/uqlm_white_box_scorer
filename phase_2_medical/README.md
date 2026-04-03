@@ -1,28 +1,28 @@
 # White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models (Phase 2)
 
-This directory contains the complete implementation of **Phase 2** of the master’s thesis  
-**“White-Box Scores for Uncertainty Quantification and Hallucination Detection in Large Language Models.”**
+This directory documents **Phase 2** of the master's thesis **"White-Box Scorers for Uncertainty Quantification and Hallucination Detection in Large Language Models."**
 
-Phase 2 evaluates whether white-box hallucination/uncertainty signals validated in Phase 1
-generalize to constrained medical QA tasks.
+Phase 2 evaluates whether white-box signals that are diagnostically useful in the Phase-1 hallucination setting retain discriminative value in constrained medical QA under benchmark-defined correctness targets.
 
 ---
 
 ## Research Objective
 
-The objective of Phase 2 is to assess robustness and transferability of white-box signals across:
+Phase 2 examines how selected white-box signals behave across:
 
 - task formats (multiple-choice vs constrained short-answer),
 - datasets (MedQA vs PubMedQA),
 - and model families (Mistral vs BioMistral).
 
-Hallucination detection is operationalized as binary error detection:
+The primary Phase-2 target is **benchmark-defined prediction error detection**:
 
 - `error = 1`: model-selected answer is incorrect
 - `error = 0`: model-selected answer is correct
 
+This preserves the binary detection structure of Phase 1, but not its exact semantic target. Phase 2 does not provide a direct measure of response-level factual hallucination in unrestricted medical generation.
+
 Primary metric: **AUROC**  
-Secondary metric: **Spearman’s rho**
+Secondary metric: **Spearman's rho**
 
 ---
 
@@ -30,16 +30,16 @@ Secondary metric: **Spearman’s rho**
 
 Phase 2 evaluates the following scorers:
 
-- **LNTP** (Length-Normalized Token Probability)
-- **MTP** (Minimum Token Probability)
-- **EGH probe (OOF)**
-- **Hidden-state probe (OOF)**
+- **LNTP** (Length-Normalized Token Probability; intrinsic score)
+- **MTP** (Minimum Token Probability; intrinsic score)
+- **EGH probe (OOF)** (supervised readout on white-box features)
+- **Hidden-state probe (OOF)** (supervised readout on pooled hidden representations)
 
-Notes:
+Interpretation notes:
 
-- Logit-based scores are treated as ranking signals (not calibrated probabilities).
-- Supervised probes are evaluated via out-of-fold predictions to avoid leakage.
-- Score orientation is checked before metric reporting for consistent interpretation.
+- intrinsic logit-based scores are used as ranking signals rather than calibrated probabilities
+- supervised probes are evaluated via out-of-fold predictions to avoid leakage
+- score orientation is checked before metric reporting
 
 ---
 
@@ -51,22 +51,18 @@ The reported Phase-2 results are anchored to archived artifacts in `outputs/fina
 - `*.manifest.json`
 - `*.manifest.bootstrap_indices.npz`
 
-These are the canonical evaluation artifacts used for all reported tables/figures.
+These files anchor the reported Phase-2 tables and figures.
 
 ---
 
 ## Datasets and Frozen Evaluation Setup
 
-Phase 2 uses frozen subsets of:
+Phase 2 uses fixed 1,000-example subsets of:
 
 - **MedQA** (USMLE-style multiple-choice)
 - **PubMedQA** (biomedical yes/no/maybe)
 
-For each dataset:
-
-- fixed subset size: `N = 1000`
-- frozen labels and frozen model outputs
-- no dataset-specific tuning during evaluation
+For each dataset, the evaluation uses frozen labels and frozen model outputs, with no dataset-specific tuning during scorer evaluation.
 
 Benchmark files and schema details are documented in [`DATA.md`](./DATA.md).
 
@@ -96,15 +92,23 @@ Phase 2 follows a controlled post-hoc protocol:
 Token-budget constraints are fixed in baseline runs (task-specific settings; see
 [`reproduce_phase2.md`](./reproduce_phase2.md)).
 
+Operationally:
+
+- frozen model continuations are generated once and then rescored post hoc under teacher forcing
+- constrained parsing maps free-form continuations into the benchmark label space before error evaluation
+- the released Markdown documentation records the protocol structure, but not the full underlying prompt text
+
 ---
 
 ## Reproduction
 
-For complete, step-by-step reproduction (exact commands, parameters, paths), see:
+For the documented reproduction procedure, command paths, and expected outputs, see:
 
 - [`reproduce_phase2.md`](./reproduce_phase2.md)
 
-Quick entry points:
+The maintained batch runners assume a Linux-like shell environment.
+
+Common entry points:
 
 Run baseline experiments:
 ```bash
@@ -119,54 +123,53 @@ python phase_2_medical/analysis/phase2_figures.py
 
 ---
 
-## Analysis and Visualization
+## Analysis Outputs
 
 Main analysis scripts:
 
 - `analysis/phase2_tables.py`
 - `analysis/phase2_figures.py`
 
-Outputs are written to:
+Baseline summary exports are written to:
 
 - `outputs/figures_tables/tables_general/`
 - `outputs/figures_tables/figures_general/`
 
-Ablation outputs are stored under `outputs/ablations/`.
+Ablation run artifacts are stored under `outputs/ablations/`. Derived ablation summaries are written under `outputs/figures_tables/ablations/`.
 
 ---
 
 ## Repository Structure (Phase 2)
 
-- `benchmarks/`  
+- `benchmarks/`
   Frozen benchmark subsets and labels
 
-- `src/`  
+- `src/`
   Data preparation, frozen-generation, and scoring pipeline
 
-- `scripts/`  
+- `scripts/`
   Reproducible shell entrypoints (baseline and ablations)
 
-- `analysis/`  
+- `analysis/`
   Deterministic table/figure generation and metric aggregation
 
-- `outputs/`  
+- `outputs/`
   Final artifacts, manifests, bootstrap indices, ablation outputs, figures/tables
 
-- `reproduce_phase2.md`  
+- `reproduce_phase2.md`
   Full reproduction instructions
 
-- `DATA.md`  
+- `DATA.md`
   Dataset/schema documentation
 
 ---
 
 ## Scope and Limitations
 
-Phase 2 evaluates hallucination detection as incorrect answer selection in constrained medical QA.
-It does **not** model free-form hallucination generation.
+Phase 2 evaluates benchmark-defined incorrect answer selection in constrained medical QA.
+It does **not** directly evaluate free-form medical hallucination generation in the Phase-1 sense.
 
-Results should be interpreted as evidence of discriminative separability under the frozen-output,
-task-constrained regime (not as calibrated uncertainty estimation or intervention performance).
+Results should be read as evidence about ranking-based discrimination in a frozen, task-constrained setting, not as calibrated uncertainty estimation or intervention performance.
 
 ---
 

@@ -138,6 +138,11 @@ Note: For the archived thesis results, the canonical Phase-1 statistics can be v
 The results file contains one entry per sample with labels and all computed scores.  
 The manifest file records configuration, environment details, AUROC values, confidence intervals, and references to stored bootstrap indices.
 
+Manifest note:
+
+- path fields stored in the archived manifest may reflect the original execution environment
+- these paths are preserved for auditability and are not expected to resolve unchanged on every machine
+
 ---
 
 ## Sanity Checks
@@ -160,6 +165,19 @@ All sources of randomness are fixed:
 
 Repeated runs produce identical results, including bootstrap confidence intervals, up to floating-point precision.  
 Minor floating-point differences may occur across different hardware architectures (e.g., CPU vs. GPU).
+
+---
+
+## Evaluation Guardrails (High Level)
+
+The evaluation pipeline is documented with several guardrails intended to prevent silent failures:
+
+- scorer outputs are checked for non-finite values
+- degenerate constant score vectors are rejected where ranking metrics would otherwise be undefined or uninformative
+- invalid examples or failed alignments are tracked explicitly for auditability
+- raw score outputs are preserved prior to polarity alignment where applicable
+
+These controls support trust in the archived artifacts, but the released results and manifest files remain the reference objects for thesis-level verification.
 
 ---
 

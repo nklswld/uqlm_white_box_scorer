@@ -1,30 +1,14 @@
 # Bootstrap Budget Ablation
 
-## Overview
+## Aim
 
-This directory contains a methodological ablation examining the effect of the bootstrap budget `B` on the confidence intervals reported in the Phase 2 medical QA evaluation.
-
-In this context, `B` denotes the number of bootstrap resamples used to estimate uncertainty around scorer-level evaluation metrics. The purpose of the ablation is to assess whether the reported interval estimates are numerically stable across reasonable choices of bootstrap budget.
+This ablation varies the bootstrap budget `B` used to estimate confidence intervals in the Phase 2 medical QA evaluation. It addresses interval stability rather than scorer quality: the question is whether the reported intervals change materially when the number of resamples is increased.
 
 ---
 
-## Hypothesis
+## Settings
 
-Bootstrap-based confidence intervals should become more stable as the number of resamples increases. Beyond a moderate bootstrap budget, further increases in `B` are expected to yield diminishing returns in interval precision.
-
----
-
-## Motivation / Background
-
-Phase 2 evaluates white-box scores for uncertainty quantification and hallucination or error detection in constrained medical QA settings. Because the reported evaluation includes bootstrap confidence intervals, the numerical reliability of these intervals depends in part on the resampling budget.
-
-This ablation therefore serves as a robustness check on the uncertainty-estimation procedure rather than on the underlying scoring methods themselves. It asks whether the selected bootstrap budget is sufficient to support stable and interpretable interval estimates without unnecessary computational cost.
-
----
-
-## Ablation Design
-
-The ablation varies only the bootstrap budget `B`, that is, the number of bootstrap resamples used for interval estimation.
+Only the bootstrap budget is changed.
 
 Evaluated settings:
 
@@ -33,30 +17,28 @@ Evaluated settings:
 - **B5000**
 - **B10000**
 
-The runs in this directory cover the Phase 2 medical QA configurations provided for this ablation, including MedQA and PubMedQA with Mistral and BioMistral variants.
+The released runs cover the available Phase 2 medical QA configurations in this ablation, including MedQA and PubMedQA with Mistral and BioMistral variants.
 
-Operationally, the ablation is implemented by changing:
+Operational change:
 
 - `--B <value>`
 
-The maintained batch runner for this experiment is:
+Runner:
 
 - `phase_2_medical/scripts/run_ablation_bootstrap_budget.sh`
 
-Each setting directory contains the corresponding run artifacts, including result files, manifests, and persisted bootstrap index files for direct comparison across budgets.
+Each setting directory contains the corresponding results, manifests, and persisted bootstrap index files.
 
 ---
 
-## Expected Effect
+## Why It Matters
 
-If the bootstrap budget is sufficiently large, the estimated confidence intervals should show only minor changes when `B` is increased further. In particular, interval widths and interval endpoints should converge as Monte Carlo noise from the bootstrap approximation decreases.
+If the baseline choice of `B` is already adequate, interval endpoints and widths should change only modestly as the budget increases. If they move substantially, the reported uncertainty bands are still sensitive to Monte Carlo approximation error.
 
-For uncertainty quantification and hallucination detection, this matters because unstable confidence intervals can make reported uncertainty estimates appear more precise or less precise than warranted. A stable bootstrap budget supports more reliable interpretation of scorer comparisons and robustness claims.
+This is therefore a check on statistical estimation stability, not an attempt to improve underlying scorer performance.
 
 ---
 
-## Notes / Interpretation
+## Reading the Results
 
-This ablation should be interpreted primarily as a sensitivity analysis of statistical estimation. It is not intended to demonstrate improved scorer quality or improved task performance through larger bootstrap budgets.
-
-Accordingly, the main quantities of interest are the stability and width of the reported confidence intervals, rather than changes in the underlying scorer rankings or point estimates. If results are already stable at moderate `B`, then larger budgets mainly increase computational cost. If substantial variation remains across budgets, the corresponding uncertainty estimates should be interpreted more cautiously.
+The main comparison is the stability of confidence intervals across `B`, especially their width and endpoints. Changes in scorer ranking are secondary. If moderate budgets already yield stable intervals, larger budgets mainly add compute cost. If substantial variation remains, the corresponding interval estimates should be treated more cautiously.

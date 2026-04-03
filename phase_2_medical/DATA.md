@@ -14,6 +14,8 @@ Phase 2 is evaluated in a **frozen-output, post-hoc** setting:
 
 Reported metrics are anchored to archived artifacts under `phase_2_medical/outputs/`.
 
+Phase 2 evaluates **benchmark-defined prediction error** under constrained medical QA. This preserves the binary detection form of Phase 1, but not the exact Phase-1 hallucination construct.
+
 ---
 
 ## Canonical Data Principle
@@ -42,11 +44,14 @@ Preparation scripts remain available for transparency, but reproducibility of re
 - `phase_2_medical/outputs/ablations/`  
   Ablation-specific result artifacts
 
+- `phase_2_medical/outputs/figures_tables/`  
+  Derived summary tables and figures built from the archived result artifacts
+
 ---
 
 ## Benchmark Files
 
-## 1) MedQA prepared subset
+### 1) MedQA prepared subset
 
 Files:
 
@@ -85,7 +90,7 @@ QID list schema (`medqa_test_qids_seed42_n1000.json`):
 
 ---
 
-## 2) PubMedQA prepared subset
+### 2) PubMedQA prepared subset
 
 File:
 
@@ -93,7 +98,13 @@ File:
 
 Purpose:
 
-- prepared labeled PubMedQA split for frozen generation and Phase-2 evaluation
+- prepared labeled PubMedQA subset for frozen generation and Phase-2 evaluation
+
+Source note:
+
+- the preparation script documents the upstream source as the `pqa_labeled` train split
+- the released repository artifact is the prepared 1,000-example subset `pubmedqa_labeled_phase2.jsonl`
+- where thesis-level wording refers more generically to frozen 1,000-example evaluation subsets, this should be understood as describing the released prepared artifact rather than renaming the upstream PubMedQA split
 
 JSONL schema:
 
@@ -152,7 +163,8 @@ Notes:
 - `pred` is derived by constrained parsing from generated continuation.
 - rare constrained parsing failures may leave `pred` missing.
 - in scoring, rare MedQA missing-`pred` cases can fall back to frozen `model_answer` text as teacher-forced answer sequence.
-- `is_error` is the binary target used in Phase-2 evaluation (`1 = incorrect`, `0 = correct`).
+- `is_error` is the binary benchmark-defined target used in Phase-2 evaluation (`1 = incorrect`, `0 = correct`).
+- `meta.prompt_truncation_max_length` records generation-side prompt truncation metadata from the frozen-output stage; scorer-side reruns may additionally apply their own context limits during feature extraction
 
 ---
 
@@ -199,6 +211,29 @@ Manifest typically includes:
 - hidden-feature coverage metadata
 - output paths
 
+Manifest path note:
+
+- absolute paths stored in manifests reflect the original execution environment and serve as archival metadata for auditability
+- these path strings are not expected to resolve unchanged on every machine or checkout location
+
+### Score Fields
+
+The principal example-level score fields are:
+
+- `lntp`: intrinsic logit-based score derived from answer-token probabilities using length normalization
+- `mtp`: intrinsic logit-based score defined by the minimum realized answer-token probability
+- `egh_grad_norm`, `egh_emb_diff`, `egh_kl`, `egh_ce`, `egh_entropy`: scalar gradient-, embedding-, or distribution-based primitives from the conditional/unconditional comparison used in the EGH-style feature family
+- `egh_probe_oof`: out-of-fold supervised prediction from the main EGH-style feature-based probe
+- `hidden_probe_oof`: out-of-fold supervised prediction from the pooled hidden-state probe
+- `egh_probe_ge`, `egh_probe_g_only`, `egh_probe_e_only`, `egh_probe_scalar_only`: released comparison variants of the EGH probe family used for ablation and analysis rather than separate benchmark targets
+
+### Result Families
+
+Within `outputs/figures_tables/`:
+
+- `tables_general/` and `figures_general/` contain baseline summary exports derived from `outputs/final/`
+- `ablations/` mirrors the major ablation families and stores derived summaries for those runs
+
 ---
 
 ## Label Semantics
@@ -210,6 +245,8 @@ Primary binary target:
 
 In scorer outputs this is mirrored as `label`.
 
+This target is a constrained benchmark prediction-error label, not a direct response-level hallucination label in the Phase-1 sense.
+
 ---
 
 ## Determinism and Reproducibility Notes
@@ -218,6 +255,19 @@ In scorer outputs this is mirrored as `label`.
 - bootstrap index arrays are serialized for reproducible CI regeneration from archived score artifacts.
 - out-of-fold probe scoring uses fixed seeds and stratified folds.
 - small floating-point differences can still occur across runtime environments; reported outputs are tied to archived artifacts.
+
+---
+
+## Evaluation Guardrails (High Level)
+
+The documented validity controls for this evaluation setting include:
+
+- finiteness checks on scorer outputs
+- rejection of degenerate constant score vectors where ranking metrics would not be informative
+- explicit tracking of invalid or excluded examples
+- preservation of raw score outputs prior to polarity alignment where applicable
+
+These controls support auditability, but the archived `results.jsonl` and `manifest.json` files remain the authoritative interpretation artifacts.
 
 ---
 

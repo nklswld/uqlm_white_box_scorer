@@ -12,7 +12,7 @@ canonical artifacts.
 - Source:
   - https://huggingface.co/datasets/truthful_qa
 - Repository role:
-  - Main benchmark for Phase 1 replication (hallucinated vs non-hallucinated).
+  - Main benchmark for the Phase-1 conceptual replication (hallucinated vs non-hallucinated responses under a controlled post-hoc setting).
 - Canonical local artifacts:
   - phase_1_replication/benchmarks/truthfulqa_hallu_frozen_model_outputs_300.jsonl
   - phase_1_replication/benchmarks/truthfulqa_simplified.json
@@ -51,7 +51,9 @@ canonical artifacts.
 - Canonical prepared artifact:
   - phase_2_medical/benchmarks/pubmedqa_labeled_phase2.jsonl
 - Notes:
-  - Default export split in script: train (for pqa_labeled).
+  - Upstream source in the preparation script: `pqa_labeled` train split.
+  - Released repository artifact: `pubmedqa_labeled_phase2.jsonl`, the prepared 1,000-example PubMedQA subset used for frozen generation and Phase-2 evaluation.
+  - In thesis-level summaries, Phase 2 may be described more generically as operating on frozen 1,000-example evaluation subsets across datasets; for PubMedQA, interpret that wording as referring to the released prepared subset rather than the upstream split name.
   - Gold labels are normalized to {yes, no, maybe}.
 
 ---

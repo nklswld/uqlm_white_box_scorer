@@ -1,30 +1,14 @@
 # Hidden Pooling Ablation
 
-## Overview
+## Aim
 
-This directory contains a methodological ablation examining the effect of hidden-state pooling strategy on the hidden-state probe used in the Phase 2 medical QA evaluation.
-
-The ablation studies how token-level hidden representations are aggregated into a single example-level feature representation for the hidden probe. Its purpose is to determine whether probe performance is materially affected by this aggregation choice.
+This ablation varies the pooling rule used to convert token-level hidden states into a single example-level representation for the hidden probe in Phase 2. It tests whether the hidden-probe results depend materially on that aggregation choice.
 
 ---
 
-## Hypothesis
+## Settings
 
-Once the hidden-layer selection is fixed, hidden-probe performance is expected to be relatively stable across reasonable pooling strategies. Any observed differences should be secondary to the underlying representational content rather than the aggregation rule itself.
-
----
-
-## Motivation / Background
-
-Phase 2 evaluates white-box scores for uncertainty quantification and hallucination or error detection in constrained medical QA tasks. For the hidden-state probe, token-level representations must be pooled into a fixed-size example representation before supervised evaluation can be performed.
-
-Pooling strategy may influence which aspects of the hidden-state signal are preserved or emphasized. This ablation therefore tests whether the hidden probe is robust to this representation-construction choice, or whether its effectiveness depends on a specific pooling convention.
-
----
-
-## Ablation Design
-
-The ablation varies only the hidden-state pooling strategy used in the hidden probe.
+Only the pooling strategy is changed.
 
 Evaluated settings:
 
@@ -32,30 +16,28 @@ Evaluated settings:
 - **last_answer**
 - **mean_all**
 
-The runs in this directory cover the Phase 2 medical QA configurations provided for this ablation, including MedQA and PubMedQA with Mistral and BioMistral variants.
+The released runs cover the available Phase 2 medical QA configurations in this ablation, including MedQA and PubMedQA with Mistral and BioMistral variants.
 
-Operationally, the ablation is implemented by changing:
+Operational change:
 
 - `--hidden_pooling <strategy>`
 
-The maintained batch runner for this experiment is:
+Runner:
 
 - `phase_2_medical/scripts/run_ablation_hidden_pooling.sh`
 
-In the maintained sweep, the remaining hidden-probe and evaluation settings are held fixed, including hidden-layer selection (`16`), bootstrap budget (`B=5000`), and cross-validation split count (`n_splits=5`). Each setting directory contains the corresponding run artifacts, including result files and manifests for direct comparison across pooling strategies.
+In the maintained sweep, the remaining hidden-probe and evaluation settings are held fixed, including hidden-layer selection (`16`), bootstrap budget (`B=5000`), and cross-validation split count (`n_splits=5`). Each setting directory contains the corresponding results and manifests.
 
 ---
 
-## Expected Effect
+## Why It Matters
 
-If the hidden probe is robust to the pooling rule, performance should remain broadly similar across the tested strategies, with only limited variation. If meaningful differences emerge, this would indicate that the way hidden states are aggregated materially affects the downstream detection signal.
+If the hidden probe is robust to the pooling rule, performance should remain broadly similar across the tested strategies. If meaningful differences emerge, the downstream signal depends not only on the hidden states themselves but also on how they are summarized.
 
-For uncertainty quantification and hallucination detection, this matters because sensitivity to pooling strategy would imply that the hidden-state score depends not only on the presence of useful internal information, but also on how that information is summarized into probe features.
+This is therefore a feature-construction sensitivity check rather than an attempt to optimize pooling in isolation.
 
 ---
 
-## Notes / Interpretation
+## Reading the Results
 
-This ablation should be interpreted as a sensitivity analysis of feature construction within the hidden-state probe. It is not intended to establish a universally optimal pooling strategy beyond the tested settings.
-
-Accordingly, the main question is whether the hidden probe remains reliable under reasonable aggregation choices, or whether conclusions depend strongly on a particular pooling convention.
+The main question is whether the hidden probe remains reliable under reasonable aggregation choices. The results should not be read as establishing a universally optimal pooling strategy beyond the tested settings.
