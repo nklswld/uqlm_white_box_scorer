@@ -56,7 +56,7 @@ GROUP_PALETTE = {
     "TP": "#55A868",
 }
 
-THRESHOLD_TEXT_FONTSIZE = 10
+THRESHOLD_TEXT_FONTSIZE = 11
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ def parse_args() -> Args:
 
     default_results = phase1_root / "outputs" / "phase1_truthfulqa_hallu_results_300.jsonl"
     default_manifest = phase1_root / "outputs" / "phase1_run_manifest.json"
-    default_outdir = phase1_root / "outputs" / "figures_tables" / "confusion_score_distributions"
+    default_outdir = phase1_root / "outputs" / "figs"
 
     parser = argparse.ArgumentParser(
         description="Phase-1 post-hoc confusion-group score distribution analysis"
@@ -411,9 +411,10 @@ def plot_confusion_group_distributions(
     fig.suptitle(
         "Phase 1 confusion-group score distributions\n"
         "(post-hoc Youden-J operating points on archived OOF scores)",
-        y=0.995,
+        y=0.988,
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.tight_layout(rect=[0, 0, 1, 0.955])
+    fig.subplots_adjust(wspace=0.24)
     safe_savefig(fig, outpath)
     plt.close(fig)
 
@@ -458,17 +459,12 @@ def main() -> None:
     summary_df["scorer"] = pd.Categorical(summary_df["scorer"], categories=list(SCORERS.keys()), ordered=True)
     summary_df = summary_df.sort_values("scorer").reset_index(drop=True)
 
-    assignments_long = build_long_assignments_export(assignments_frames)
+    assignments_long = pd.concat(assignments_frames, axis=0, ignore_index=True)
+    assignments_long["group"] = pd.Categorical(assignments_long["group"], categories=GROUP_ORDER, ordered=True)
+    assignments_long = assignments_long.sort_values(["scorer", "group"]).reset_index(drop=True)
     group_stats_df = build_group_stats(assignments_long)
 
-    summary_path = args.outdir / "phase1_confusion_operating_points_summary.csv"
-    group_stats_path = args.outdir / "phase1_confusion_group_stats.csv"
-    assignments_path = args.outdir / "phase1_confusion_assignments_long.csv"
     figure_path = args.outdir / "fig_phase1_confusion_groups_hidden_egh.pdf"
-
-    summary_df.to_csv(summary_path, index=False)
-    group_stats_df.to_csv(group_stats_path, index=False)
-    assignments_long.to_csv(assignments_path, index=False)
 
     plot_confusion_group_distributions(
         assignments_long=assignments_long,
@@ -477,9 +473,6 @@ def main() -> None:
         outpath=figure_path,
     )
 
-    print(f"[OK] Wrote: {summary_path}")
-    print(f"[OK] Wrote: {group_stats_path}")
-    print(f"[OK] Wrote: {assignments_path}")
     print(f"[OK] Wrote: {figure_path}")
 
     for row in summary_df.to_dict(orient="records"):
