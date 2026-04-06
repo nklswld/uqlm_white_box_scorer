@@ -57,6 +57,10 @@ GROUP_PALETTE = {
 }
 
 THRESHOLD_TEXT_FONTSIZE = 13
+PANEL_TITLE_FONTSIZE = 16
+AXIS_LABEL_FONTSIZE = 15
+TICK_LABEL_FONTSIZE = 13
+SUPTITLE_FONTSIZE = 18
 
 
 @dataclass(frozen=True)
@@ -356,7 +360,7 @@ def plot_confusion_group_distributions(
     outpath: Path,
 ) -> None:
     """Render a publication-style combined 2-panel violin-plus-strip plot."""
-    fig, axes = plt.subplots(1, 2, figsize=(10.6, 4.8), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(8.5, 4.8), sharey=True)
 
     for ax, scorer_name in zip(axes, SCORERS.keys()):
         sub = assignments_long[assignments_long["scorer"] == scorer_name].copy()
@@ -388,31 +392,33 @@ def plot_confusion_group_distributions(
         threshold = float(summary_df.loc[summary_df["scorer"] == scorer_name, "threshold"].iloc[0])
         ax.axhline(threshold, linestyle="--", linewidth=1.25, color="black", alpha=0.85)
         ax.text(
-            0.03,
-            0.97,
-            f"Youden-J threshold = {threshold:.3f}",
-            transform=ax.transAxes,
+            -0.3,
+            threshold + 0.04,
+            f"Youden-J threshold\n= {threshold:.3f}",
             ha="left",
-            va="top",
+            va="bottom",
             fontsize=THRESHOLD_TEXT_FONTSIZE,
             bbox=dict(facecolor="white", edgecolor="none", alpha=0.82, pad=0.25),
         )
 
-        ax.set_title(scorer_name)
+
+        ax.set_title(scorer_name, fontsize=PANEL_TITLE_FONTSIZE)
         ax.set_xlabel("")
         ax.set_xticks(np.arange(len(GROUP_ORDER)))
-        ax.set_xticklabels(format_group_labels(group_stats, scorer_name))
+        ax.set_xticklabels(format_group_labels(group_stats, scorer_name), fontsize=TICK_LABEL_FONTSIZE)
+        ax.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE)
         ax.set_ylim(0.0, 1.0)
         ax.grid(axis="y", linestyle=":", alpha=0.45)
 
-    axes[0].set_ylabel("OOF hallucination score")
+    axes[0].set_ylabel("OOF hallucination score", fontsize=AXIS_LABEL_FONTSIZE)
     axes[1].set_ylabel("")
 
     fig.suptitle(
         "Phase 1 confusion-group score distributions\n"
         "(post-hoc Youden-J operating points on archived OOF scores)",
-        y=0.995,
+        y=0.98,
         linespacing=1.45,
+        fontsize=SUPTITLE_FONTSIZE,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.99])
     fig.subplots_adjust(wspace=0.24)
