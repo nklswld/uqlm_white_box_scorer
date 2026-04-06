@@ -56,7 +56,7 @@ GROUP_PALETTE = {
     "TP": "#55A868",
 }
 
-THRESHOLD_TEXT_FONTSIZE = 11
+THRESHOLD_TEXT_FONTSIZE = 13
 
 
 @dataclass(frozen=True)
@@ -411,9 +411,10 @@ def plot_confusion_group_distributions(
     fig.suptitle(
         "Phase 1 confusion-group score distributions\n"
         "(post-hoc Youden-J operating points on archived OOF scores)",
-        y=0.988,
+        y=0.995,
+        linespacing=1.45,
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.955])
+    fig.tight_layout(rect=[0, 0, 1, 0.99])
     fig.subplots_adjust(wspace=0.24)
     safe_savefig(fig, outpath)
     plt.close(fig)
