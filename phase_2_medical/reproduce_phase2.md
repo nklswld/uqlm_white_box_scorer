@@ -221,12 +221,18 @@ After baseline outputs are present:
 ```bash
 python phase_2_medical/analysis/phase2_tables.py
 python phase_2_medical/analysis/phase2_figures.py
+python phase_2_medical/analysis/analyze_phase2_roc_curves.py
 ```
 
 Expected output roots:
 
 - Tables: `phase_2_medical/outputs/figures_tables/tables_general/`
 - Figures: `phase_2_medical/outputs/figures_tables/figures_general/`
+
+Appendix-style ROC figure outputs from `analyze_phase2_roc_curves.py`:
+
+- `phase_2_medical/outputs/figures_tables/figures_general/fig_phase2_pubmedqa_roc_models.pdf`
+- `phase_2_medical/outputs/figures_tables/figures_general/fig_phase2_medqa_roc_models.pdf`
 
 ---
 

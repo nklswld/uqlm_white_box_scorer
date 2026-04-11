@@ -119,6 +119,7 @@ Generate tables and figures:
 ```bash
 python phase_2_medical/analysis/phase2_tables.py
 python phase_2_medical/analysis/phase2_figures.py
+python phase_2_medical/analysis/analyze_phase2_roc_curves.py
 ```
 
 ---
@@ -129,6 +130,7 @@ Main analysis scripts:
 
 - `analysis/phase2_tables.py`
 - `analysis/phase2_figures.py`
+- `analysis/analyze_phase2_roc_curves.py` (appendix-style scorer ROC figures for PubMedQA and MedQA)
 
 Baseline summary exports are written to:
 
