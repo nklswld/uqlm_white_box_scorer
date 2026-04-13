@@ -38,6 +38,7 @@ with IN_PATH.open("r", encoding="utf-8") as f_in, OUT_PATH.open("w", encoding="u
             "gold": obj.get("reference_answer", None),
             "pred": None,
             # Convention: Phase-1 `hallucinated` becomes the binary Phase-2 error target.
+            # Missing `hallucinated` currently falls back to 0 by default.
             "is_error": int(obj.get("hallucinated", 0)),
             "meta": {
                 "source": IN_PATH.name

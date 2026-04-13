@@ -249,6 +249,7 @@ for task, model, results_path, manifest_path, boot_path in runs:
         boot_key = SCORE_TO_BOOTKEY.get(score_l, score_l)
         boot_idx = boot_map.get(boot_key)
         if boot_idx is None:
+            # Fallback: use the shared saved index set if no score-specific indices exist.
             boot_idx = boot_map.get("indices")
 
         # Hidden probe may be defined on a kept subset; other scorers are expected on the full run.
@@ -554,6 +555,7 @@ for task in TASK_ORDER_STORY:
         if r_m.empty or r_b.empty:
             raise KeyError(f"Missing rows for diff: task={task}, score={score}")
         r_m, r_b = r_m.iloc[0], r_b.iloc[0]
+        # Whiskers combine the separate model CIs; this is not a paired delta-bootstrap CI.
         diff = float(r_m["auroc"]) - float(r_b["auroc"])
         rows.append({"task": task, "score": score, "diff": diff,
                      "lo": float(r_m["ci95_lo"]) - float(r_b["ci95_hi"]),
