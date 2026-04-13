@@ -209,7 +209,7 @@ def assign_confusion_groups(
     score_col: str,
     threshold: float,
 ) -> pd.DataFrame:
-    """Assign predictions and TP/FP/TN/FN groups for a single scorer."""
+    """Assign predictions and TP/FP/TN/FN groups for one scorer."""
     out = base_df.copy()
     y_true = out[LABEL_COL].to_numpy(dtype=int)
     score = out[score_col].to_numpy(dtype=float)

@@ -1,9 +1,8 @@
-"""
-Deterministically exports a seeded, without-replacement subsample of the MedQA (USMLE 4-option) dataset.
-Inputs: dataset split ("train"|"test"), sample size n, RNG seed, and output file paths.
-Outputs: (1) JSONL of labeled multiple-choice QA examples, (2) JSON list of sampled qids for exact reproducibility.
-Each row includes a stable qid derived from split, original row index, and a content hash of the question text.
-Determinism note: sampling uses Python's random.Random(seed); output order is fixed by sorting sampled indices.
+"""Prepare MedQA for Phase 2.
+
+Draw a seeded without-replacement subsample from the chosen split, write the
+benchmark JSONL, and store the sampled qids separately to freeze exact sample
+membership. QIDs include split, original row index, and a question-text hash.
 """
 
 # phase_2_medical/src/prepare_medqa_phase2.py
@@ -28,6 +27,7 @@ def sha1_12(s: str) -> str:
 
 
 def normalize_gold(label: Any) -> str:
+    """Normalize the MedQA gold label to {'A','B','C','D'}; raise otherwise."""
     lab = str(label).strip().upper()
     if lab not in {"A", "B", "C", "D"}:
         raise ValueError(f"Unexpected MedQA gold label: {label!r}")
@@ -35,9 +35,7 @@ def normalize_gold(label: Any) -> str:
 
 
 def normalize_choices(opts: Any) -> Dict[str, str]:
-    """
-    Expect dict-like options with keys A-D.
-    """
+    """Normalize answer options to a dense {'A','B','C','D'} mapping of strings."""
     if not isinstance(opts, dict):
         raise ValueError(f"MedQA options must be a dict, got: {type(opts)}")
     out: Dict[str, str] = {}
@@ -47,11 +45,12 @@ def normalize_choices(opts: Any) -> Dict[str, str]:
 
 
 def make_qid(split: str, original_index: int, question: str) -> str:
-    # Stable, deterministic ID: includes original row index + content hash
+    """Build a stable qid from split, original row index, and question hash."""
     return f"medqa::{split}::{original_index:06d}::{sha1_12(question.strip())}"
 
 
 def sample_indices(n_total: int, n: int, seed: int) -> List[int]:
+    """Draw an exact-N sample without replacement from a fixed local RNG."""
     if n > n_total:
         raise ValueError(f"Requested n={n} but dataset only has n_total={n_total}.")
     rng = random.Random(seed)
@@ -65,22 +64,13 @@ def export_medqa(
     n: int,
     seed: int,
 ) -> Tuple[int, int]:
-    """
-    Exports a deterministic subsample of MedQA to JSONL with schema:
-      {
-        "qid": str,
-        "question": str,
-        "choices": {"A": str, "B": str, "C": str, "D": str},
-        "gold": "A|B|C|D"
-      }
-    Also writes sampled qids to JSON list for reproducibility.
-    """
+    """Export a seeded MedQA subsample to JSONL plus a frozen qid list."""
     # NOTE: potential issue: dataset revision is not pinned; upstream updates can change sampled content for same seed.
     ds = load_dataset("GBaker/MedQA-USMLE-4-options")[split]
     n_total = len(ds)
 
     picked = sample_indices(n_total=n_total, n=n, seed=seed)
-    # Keep a stable order (optional but nice): sort indices so output is deterministic & readable
+    # Keep output order stable after sampling so membership and row order are both reproducible.
     picked_sorted = sorted(picked)
 
     ensure_parent_dir(out_jsonl)

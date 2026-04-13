@@ -1,11 +1,10 @@
 """
-Phase 2 figure/metric generator for medical QA evaluation runs.
+Phase-2 figures / metrics from archived medical QA runs.
 
-Reads per-run artifacts under outputs/final/: *.manifest.json, matching *.results.jsonl, and
-*.manifest.bootstrap_indices.npz (precomputed resample indices).
-Writes publication-ready PDF figures into outputs/figures_tables/figures_general (including grouped and story panels).
+Scan saved results, manifests, and bootstrap-index artifacts under outputs/final/
+and rebuild the AUROC / Spearman summaries used by the figure scripts.
 Outputs: AUROC point estimates with 95% percentile bootstrap CIs and Spearman ρ (bootstrap mean + 95% CI).
-Determinism: no RNG is used; all bootstrap resamples are driven by precomputed index arrays in the input NPZ files.
+No RNG is used here; bootstrap CIs are driven by the stored resample indices.
 """
 
 # phase_2_medical/analysis/phase2_figures.py
@@ -74,6 +73,7 @@ MODEL_PRETTY = {"mistral": "Mistral", "biomistral": "BioMistral"}
 MODEL_COLOR  = {"mistral": "tab:blue", "biomistral": "tab:orange"}
 MODEL_ORDER  = ["mistral", "biomistral"]
 
+# Mapping from score key to bootstrap-index key in the saved NPZ artifacts.
 SCORE_TO_BOOTKEY = {
     "lntp": "lntp", "mtp": "mtp",
     "egh_probe_oof": "egh", "egh_probe_ge": "egh_ge",
@@ -107,6 +107,7 @@ def load_jsonl(path: Path):
 
 
 def load_bootstrap_map(npz_path: Path):
+    """Load bootstrap arrays from NPZ; normalize common key aliases."""
     z, out = np.load(npz_path, allow_pickle=True), {}
     for k in z.files:
         arr = z[k]
@@ -123,12 +124,14 @@ def load_bootstrap_map(npz_path: Path):
 
 
 def find_label_key(example: dict):
+    """Find the binary label field in one archived result row."""
     for k in ["is_error", "label", "y", "target", "error"]:
         if k in example: return k
     raise KeyError("No label key found.")
 
 
 def extract_scores(example: dict):
+    """Extract scorer values from nested schemas or flat numeric fields (best-effort)."""
     for key in ("scores", "wb_scores"):
         if key in example and isinstance(example[key], dict):
             return example[key]
@@ -137,11 +140,13 @@ def extract_scores(example: dict):
 
 
 def auroc_with_best_direction(y, s):
+    """Compute AUROC and flip sign if needed so higher means more error-like."""
     au = roc_auc_score(y, s)
     return (roc_auc_score(y, -s), -1.0) if au < 0.5 else (au, +1.0)
 
 
 def bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05):
+    """Bootstrap mean and percentile CI for AUROC from explicit indices."""
     aucs = [roc_auc_score(y[i], s[i]) for i in boot_idx if y[i].min() != y[i].max()]
     if not aucs: return np.nan, np.nan, np.nan
     aucs = np.array(aucs)
@@ -149,6 +154,7 @@ def bootstrap_ci_from_indices(y, s, boot_idx, alpha=0.05):
 
 
 def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
+    """Bootstrap mean and percentile CI for Spearman rho from explicit indices."""
     rhos = [pd.Series(s[i]).corr(pd.Series(y[i]), method="spearman")
             for i in boot_idx if y[i].min() != y[i].max()]
     rhos = [r for r in rhos if not pd.isna(r)]
@@ -158,6 +164,7 @@ def bootstrap_spearman_ci_from_indices(y, s, boot_idx, alpha=0.05):
 
 
 def infer_task_model_from_manifest(path: Path):
+    """Read task and coarse model family from one run manifest."""
     m = json.loads(path.read_text(encoding="utf-8"))
     model_name = str(m.get("config", {}).get("model_name", "")).lower()
     return str(m.get("task", "")).lower(), "biomistral" if "bio" in model_name else "mistral"
@@ -228,6 +235,7 @@ for task, model, results_path, manifest_path, boot_path in runs:
     y          = np.array([int(r[y_key]) for r in rows], dtype=int)
     score_dicts = [{str(k).lower(): v for k, v in extract_scores(r).items()} for r in rows]
 
+    # Keep only scores present in every row so vectors stay aligned to archived row order.
     keys = set(score_dicts[0])
     for d in score_dicts[1:]: keys &= set(d)
     S = {k: np.array([d[k] for d in score_dicts], dtype=float)
@@ -243,6 +251,7 @@ for task, model, results_path, manifest_path, boot_path in runs:
         if boot_idx is None:
             boot_idx = boot_map.get("indices")
 
+        # Hidden probe may be defined on a kept subset; other scorers are expected on the full run.
         if score_l == "hidden_probe_oof" and hidden_kept is not None:
             au, direction = auroc_with_best_direction(y[hidden_kept], s_raw[hidden_kept])
         else:
@@ -367,7 +376,6 @@ plot_spearman_bar(df_spear_filtered,
 # ---------------------------------------------------------------------
 def _plot_grouped(df_task, title, outpath,
                   y_col, ylim, ylabel, baseline, sort_col=None):
-    """Generic grouped bar chart (scorer × model) with CI errorbars and value labels."""
     dfp = df_task.copy()
     dfp["score"] = dfp["score"].str.lower()
     dfp["model"] = dfp["model"].str.lower()
